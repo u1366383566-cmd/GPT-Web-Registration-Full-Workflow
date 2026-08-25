@@ -122,6 +122,22 @@ MAIL_NEST_API_KEY = env_str("MAIL_NEST_API_KEY", "")
 MAIL_NEST_PROJECT_CODE = "chatgpt001"
 
 # ============================================================
+# Mail.cx 临时邮箱 API：https://api.mail.cx/v1
+# ============================================================
+
+# 选择 EMAIL_SOURCE="mailcx" 时必填；Dashboard → Tokens 创建。
+MAILCX_API_TOKEN = env_str("MAILCX_API_TOKEN", "")
+
+# Mail.cx API 根地址；正常无需修改。
+MAILCX_API_BASE = "https://api.mail.cx/v1"
+
+# 可选：固定使用的 Mail.cx 系统域名或已验证自有域名。留空时调用 /config 自动选择 default 域名。
+MAILCX_DOMAIN = ""
+
+# 自动生成邮箱 local-part 的长度；Mail.cx 支持 2-20 位小写字母、数字、点、下划线或短横线。
+MAILCX_RANDOM_LOCAL_LENGTH = 12
+
+# ============================================================
 # CloudMail API 文档：https://doc.skymail.ink/api/api-doc
 # ============================================================
 
@@ -148,4 +164,4 @@ CLOUDMAIL_AUTO_ADD_USER = True
 CLOUDMAIL_RANDOM_LOCAL_LENGTH = 12
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'EMAIL_SOURCE': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'GPTMAIL_API_KEY': 'str', 'OUTLOOK_FETCH_MODE': 'str', 'MAIL_NEST_API_KEY': 'str', 'MAIL_NEST_PROJECT_CODE': 'str', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDMAIL_API_BASE': 'str', 'CLOUDMAIL_ADMIN_EMAIL': 'str', 'CLOUDMAIL_PASSWORD': 'str', 'CLOUDMAIL_TOKEN_PATH': 'str', 'CLOUDMAIL_AUTH_TOKEN': 'str', 'CLOUDMAIL_DOMAINS': 'list_str_multiline', 'CLOUDMAIL_AUTO_ADD_USER': 'bool', 'CLOUDMAIL_RANDOM_LOCAL_LENGTH': 'int'})
+apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'EMAIL_SOURCE': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'GPTMAIL_API_KEY': 'str', 'OUTLOOK_FETCH_MODE': 'str', 'MAIL_NEST_API_KEY': 'str', 'MAIL_NEST_PROJECT_CODE': 'str', 'MAILCX_API_TOKEN': 'str', 'MAILCX_API_BASE': 'str', 'MAILCX_DOMAIN': 'str', 'MAILCX_RANDOM_LOCAL_LENGTH': 'int', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDMAIL_API_BASE': 'str', 'CLOUDMAIL_ADMIN_EMAIL': 'str', 'CLOUDMAIL_PASSWORD': 'str', 'CLOUDMAIL_TOKEN_PATH': 'str', 'CLOUDMAIL_AUTH_TOKEN': 'str', 'CLOUDMAIL_DOMAINS': 'list_str_multiline', 'CLOUDMAIL_AUTO_ADD_USER': 'bool', 'CLOUDMAIL_RANDOM_LOCAL_LENGTH': 'int'})

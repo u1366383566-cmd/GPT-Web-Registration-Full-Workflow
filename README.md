@@ -49,6 +49,7 @@ ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目�
 - Cloudflare Worker 临时邮箱：自动创建 + JWT 取码（`cloudflare`，兼容 cloudflare_temp_email）
 - 通用 API 邮箱：`email----取码地址`
 - GPTMail 临时邮箱 API：运行时随机生成邮箱并自动收取验证码
+- Mail.cx 临时邮箱 API：运行时随机生成地址并通过服务端长轮询收取验证码
 - `EMAIL_SOURCE` 支持多个来源组合，例如：
 
 ```python
@@ -203,6 +204,16 @@ GPTMAIL_API_KEY=你的_GPTMail_API_Key
 ```
 
 服务地址固定为 `https://mail.chatgpt.org.uk`。未填写 Key 时，任务会提示填写 `GPTMail API Key`，不会使用公共测试 Key。
+
+#### Mail.cx 临时邮箱
+
+在 WebUI 的「配置 → 邮箱 / OTP → Mail.cx」填写 Dashboard → Tokens 创建的 API Token，并将邮箱来源设置为：
+
+```python
+EMAIL_SOURCE = "mailcx"
+```
+
+Mail.cx 邮箱无需预先创建；项目会从 `/config` 读取系统默认域名，随机生成地址，并用 `/inbox/{address}` 的服务端长轮询等待 OpenAI 验证码。若已在 Mail.cx 验证自有域名，可在「Mail.cx 邮箱域名」填写该域名。Mail.cx 对单个 Token 限制一个并发长轮询，因此使用该来源时建议注册并发设为 `1`。
 
 #### Cloudflare Worker 临时邮箱（`cloudflare`）
 

@@ -91,20 +91,30 @@ class CloakElement:
             self.click()
         except Exception:
             pass
-        if "\ue03d" in text or "\ue009" in text or "command" in lower or "control" in lower:
-            # Selenium Keys.CONTROL/COMMAND 编码可能传入私有区字符；这里按全选处理。
+        if "\ue003" in text:
+            # Selenium Keys.BACKSPACE 是私有区字符；绝不能把它当文本输入。
+            self.page.keyboard.press("Backspace")
+            return
+        if "\ue03d" in text or "command" in lower:
+            # Selenium Keys.COMMAND 编码可能传入私有区字符；这里按全选处理。
             try:
                 self.page.keyboard.press("Meta+A")
             except Exception:
                 self.page.keyboard.press("Control+A")
             return
+        if "\ue009" in text or "control" in lower:
+            self.page.keyboard.press("Control+A")
+            return
         try:
+            # Selenium send_keys 是追加输入。共享注册逻辑在人工输入模式下会逐字符
+            # 调用本方法；locator.fill 会覆盖整个字段，最终只会留下最后一个字符。
+            self.page.keyboard.type(text, delay=35)
+        except Exception:
+            # 极少数页面 keyboard 输入不可用时，保留原有 fill 回退。
             if self.locator is not None:
                 self.locator.fill(text, timeout=10000)
             else:
                 self.handle.fill(text, timeout=10000)
-        except Exception:
-            self.page.keyboard.type(text, delay=35)
 
     def get_attribute(self, name: str) -> str | None:
         try:
@@ -131,6 +141,7 @@ class CloakSeleniumDriver:
         self.context = context
         self.page = page
         self._page_load_timeout_ms = int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90) * 1000
+        self._is_cloak_selenium_adapter = True
         self.switch_to = _SwitchTo(self)
 
     @property

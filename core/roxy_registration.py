@@ -289,6 +289,11 @@ def _human_click(driver, el, *, label: str = "") -> None:
 
 def _human_type_text(driver, el, value: str, *, clear: bool = True) -> None:
     """按字符/小段输入，触发真实 key events；失败时回退 JS setter。"""
+    # CloakBrowser 的 humanize 键盘层会异步处理按键。共享流程逐字符调用
+    # send_keys 时可能发生乱序；对 React 受控字段一次性写入完整值更可靠。
+    if bool(getattr(driver, "_is_cloak_selenium_adapter", False)):
+        _set_element_value(driver, el, str(value))
+        return
     if not _browser_actions_enabled():
         if clear:
             try:

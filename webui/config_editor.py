@@ -40,6 +40,22 @@ EDITABLE_FIELDS = [
         "label": "Session 签名密钥", "help": "可选，保存在 .env（WEBUI_SESSION_SECRET）；不填则从固定授权码派生，修改授权码会使已有登录失效",
         "storage": "env", "secret": True,
     },
+    # ---- ChatGPT2API account pool ----
+    {
+        "key": "CHATGPT2API_BASE_URL", "file": "register.py", "type": "str", "group": "ChatGPT2API",
+        "label": "ChatGPT2API 地址", "help": "本机默认 http://127.0.0.1:8021；用于把成功注册账号直接导入其账号池",
+        "storage": "env",
+    },
+    {
+        "key": "CHATGPT2API_AUTH_KEY", "file": "register.py", "type": "str", "group": "ChatGPT2API",
+        "label": "ChatGPT2API 管理员密钥", "help": "ChatGPT2API 的管理员访问密钥；仅保存到本项目 .env，不会发送到浏览器",
+        "storage": "env", "secret": True,
+    },
+    {
+        "key": "CHATGPT2API_IMPORT_TIMEOUT", "file": "register.py", "type": "int", "group": "ChatGPT2API",
+        "label": "导入超时(秒)", "help": "调用 ChatGPT2API 账号导入接口的最长等待时间，建议保留 20",
+        "storage": "env",
+    },
     # ---- 功能开关 ----
     {
         "key": "ENABLE_CODEX_AUTO", "file": "codex.py", "type": "bool", "group": "功能开关",
@@ -396,6 +412,22 @@ EDITABLE_FIELDS = [
     {
         "key": "MAIL_NEST_PROJECT_CODE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
         "label": "MailNest 项目代码", "help": "项目代码 默认 chatgpt001 获取页面 mailnest.top/buy-email",
+    },
+    {
+        "key": "MAILCX_API_TOKEN", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "Mail.cx API Token", "help": "Dashboard → Tokens 创建；仅保存在 .env，请勿提交或分享", "storage": "env", "secret": True,
+    },
+    {
+        "key": "MAILCX_API_BASE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "Mail.cx API 地址", "help": "默认 https://api.mail.cx/v1；正常无需修改",
+    },
+    {
+        "key": "MAILCX_DOMAIN", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "Mail.cx 邮箱域名", "help": "可选。留空自动使用 /config 中的默认系统域名；也可填已验证的自有域名",
+    },
+    {
+        "key": "MAILCX_RANDOM_LOCAL_LENGTH", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "Mail.cx 随机前缀长度", "help": "随机邮箱 @ 前的长度，范围 2-20，建议 12",
     },
     {
         "key": "CLOUDMAIL_API_BASE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",

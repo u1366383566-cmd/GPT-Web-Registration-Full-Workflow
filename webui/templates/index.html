@@ -2054,6 +2054,7 @@
         <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedJobsV2" disabled title="删除选中的非运行中任务，并同时删除对应日志">删除选中</button>
         <button type="button" class="jobs-tb-btn" id="btnCancelPendingV2" title="把所有排队任务标记为已取消">取消全部排队</button>
         <button type="button" class="jobs-tb-btn" id="btnRefreshJobsV2" title="手动刷新任务列表">刷新</button>
+        <button type="button" class="jobs-tb-btn" id="btnImportAllSuccessJobsChatgpt2ApiV2" title="将所有成功任务对应的账号导入 ChatGPT2API">一键导入成功账号</button>
         <label class="jobs-tb-field">注册数量
           <span class="el-input-number">
             <input id="regCountV2" type="number" min="1" max="200" value="1" inputmode="numeric">
@@ -2177,14 +2178,16 @@
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedLinesV2" disabled title="复制选中账号的完整整行，每个账号一行">复制行</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedTokensV2" disabled title="复制选中账号的 Token，每个账号一行">复制Token</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedEmailsV2" disabled title="复制选中账号的邮箱，每个账号一行">复制邮箱</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedTxtV2" disabled title="把选中账号的完整整行保存为 TXT 文件，每个账号一行">下载TXT</button>
-          <button type="button" class="jobs-tb-btn" id="btnArchiveSelectedAccountsV2" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档选中</button>
+           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedTxtV2" disabled title="把选中账号的完整整行保存为 TXT 文件，每个账号一行">下载TXT</button>
+           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnImportSelectedChatgpt2ApiV2" disabled title="把选中账号直接导入已配置的 ChatGPT2API 账号池">导入ChatGPT2API</button>
+           <button type="button" class="jobs-tb-btn" id="btnArchiveSelectedAccountsV2" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档选中</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedAccountsV2" disabled title="删除选中的本地账号/token记录">删除</button>
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">全部</span>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCopyAllTokensV2" title="复制当前页所有 Token，每个账号一行">复制Token</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopyAllLinesV2" title="复制当前页所有账号整行，每个账号一行">复制整行</button>
+           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCopyAllTokensV2" title="复制当前页所有 Token，每个账号一行">复制Token</button>
+           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopyAllLinesV2" title="复制当前页所有账号整行，每个账号一行">复制整行</button>
+           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnImportAllChatgpt2ApiV2" title="把全部未归档成功账号一键导入已配置的 ChatGPT2API 账号池">一键导入ChatGPT2API</button>
         </div>
       </div>
       <div class="accounts-table-v2-wrap">
@@ -2773,6 +2776,8 @@ function bindJobsBodyEvents(bodyEl) {
     }
     const delBtn = e.target.closest('[data-delete-job]');
     if (delBtn) deleteJob(parseInt(delBtn.dataset.deleteJob, 10), delBtn);
+    const importBtn = e.target.closest('[data-import-job-chatgpt2api]');
+    if (importBtn) importSuccessfulJobsToChatgpt2Api([parseInt(importBtn.dataset.importJobChatgpt2api, 10)], importBtn);
   });
   bodyEl.addEventListener('change', (e) => {
     const cb = e.target.closest('.job-row-check');
@@ -2796,6 +2801,8 @@ function bindJobsBodyEvents(bodyEl) {
   if (cancelV2) cancelV2.addEventListener('click', () => cancelAllPendingJobs(cancelV2));
   const refreshV2 = $('#btnRefreshJobsV2');
   if (refreshV2) refreshV2.addEventListener('click', refreshJobs);
+  const importAllSuccessV2 = $('#btnImportAllSuccessJobsChatgpt2ApiV2');
+  if (importAllSuccessV2) importAllSuccessV2.addEventListener('click', () => importSuccessfulJobsToChatgpt2Api([], importAllSuccessV2, true));
 
   function stepInputNumber(inputId, delta) {
     const el = document.getElementById(inputId);
@@ -2846,6 +2853,7 @@ function renderJobs() {
             ${manualOtp ? `<input class="manual-otp-input manual-otp-input--v2" data-otp-email="${esc(j.email)}" data-otp-job="${esc(j.id)}" placeholder="邮箱验证码" maxlength="8" title="手动模式下，打开邮箱后把 6 位验证码贴这里"><button type="button" class="jobs-v2-op jobs-v2-op--otp" data-submit-otp-job="${esc(j.id)}" data-email="${esc(j.email)}" title="提交验证码">${icons.check}</button>` : ''}
             ${stoppable ? `<button type="button" class="jobs-v2-op jobs-v2-op--stop" data-stop-job="${esc(j.id)}" title="${j.status === 'stopping' ? '停止/修复' : '停止'}">${icons.stop}</button>` : ''}
             ${j.retryable ? `<button type="button" class="jobs-v2-op jobs-v2-op--retry" data-retry-job="${esc(j.id)}" title="${esc(j.retry_action === 'codex' ? '账号已创建，仅补跑 Codex 授权' : (j.retry_label || '重试'))}">${icons.retry}</button>` : ''}
+            ${j.status === 'success' ? `<button type="button" class="jobs-v2-op" data-import-job-chatgpt2api="${esc(j.id)}" title="导入 ChatGPT2API">导入</button>` : ''}
             <button type="button" class="jobs-v2-op jobs-v2-op--del" data-delete-job="${esc(j.id)}" ${running ? 'disabled title="运行中的任务不能删除；如需删除请先停止"' : 'title="删除"'}>${icons.del}</button>
           </div>
         </td>
@@ -3383,6 +3391,7 @@ function _tokenCellV2(r) {
 function _accountsV2MoreMenu(r) {
   const parts = [
     `<button type="button" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>`,
+    r.has_access_token ? `<button type="button" data-chatgpt2api-import="${esc(r.id)}" title="导入到已配置的 ChatGPT2API 账号池">导入ChatGPT2API</button>` : '',
     `<button type="button" data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button>`,
     `<button type="button" onclick="checkSelectedLive([Number('${esc(r.id)}')], this); return false;" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活刷新AT</button>`,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
@@ -3467,6 +3476,7 @@ function updateAccountSelectionUi(pageRows = null) {
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedTokensV2', 'btnCopySelectedEmailsV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
+    'btnImportSelectedChatgpt2ApiV2',
   ];
   v2Ids.forEach(id => {
     const el = document.getElementById(id);
@@ -3614,6 +3624,12 @@ async function onAccountsBodyClick(e) {
   const archiveBtn = e.target.closest('[data-account-archive]');
   if (archiveBtn) {
     await archiveOneAccount(Number(archiveBtn.dataset.accountArchive), archiveBtn.dataset.archived === '1', archiveBtn);
+    return;
+  }
+
+  const importChatgpt2ApiBtn = e.target.closest('[data-chatgpt2api-import]');
+  if (importChatgpt2ApiBtn) {
+    await importAccountsToChatgpt2Api([Number(importChatgpt2ApiBtn.dataset.chatgpt2apiImport)], importChatgpt2ApiBtn);
     return;
   }
 
@@ -4003,6 +4019,57 @@ function copySelectedAccountEmails() {
   if (!emails.length) { showToast('选中账号没有可复制的邮箱'); return; }
   copyText(emails.join('\n'));
   showToast(`已复制 ${emails.length} 个邮箱`);
+}
+
+async function importAccountsToChatgpt2Api(accountIds, button = null, importAll = false) {
+  const ids = Array.from(new Set((accountIds || []).map(Number).filter(Number.isFinite)));
+  if (!importAll && !ids.length) { showToast('请先选择账号'); return; }
+  const countLabel = importAll ? '全部未归档成功账号' : `选中的 ${ids.length} 个账号`;
+  if (!confirm(`确定将${countLabel}导入 ChatGPT2API 吗？\n\n将使用配置页中保存的本地 ChatGPT2API 地址和管理员密钥。重复账号会由目标账号池自动跳过。`)) return;
+  const oldLabel = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = '导入中...'; }
+  try {
+    const r = await api('/api/accounts/import-chatgpt2api', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(importAll ? {all: true} : {account_ids: ids}),
+    });
+    const localSkipped = (r.skipped_local || []).length;
+    showToast(`ChatGPT2API 导入完成：新增 ${r.added || 0}，重复跳过 ${r.skipped || 0}${localSkipped ? `，本地跳过 ${localSkipped}` : ''}`);
+  } catch (err) {
+    showToast('导入 ChatGPT2API 失败: ' + err.message);
+  } finally {
+    if (button) { button.textContent = oldLabel; button.disabled = false; }
+    updateAccountSelectionUi();
+  }
+}
+
+async function importSelectedAccountsToChatgpt2Api() {
+  await importAccountsToChatgpt2Api(Array.from(ACCOUNT_SELECTED), $('#btnImportSelectedChatgpt2ApiV2'));
+}
+
+async function importAllAccountsToChatgpt2Api() {
+  await importAccountsToChatgpt2Api([], $('#btnImportAllChatgpt2ApiV2'), true);
+}
+
+async function importSuccessfulJobsToChatgpt2Api(jobIds, button = null, importAll = false) {
+  const ids = Array.from(new Set((jobIds || []).map(Number).filter(Number.isFinite)));
+  if (!importAll && !ids.length) { showToast('请先选择成功任务'); return; }
+  const countLabel = importAll ? '全部成功任务对应的账号' : `任务 #${ids.join('、#')} 对应的账号`;
+  if (!confirm(`确定将${countLabel}导入 ChatGPT2API 吗？\n\n将使用配置页中保存的本地 ChatGPT2API 地址和管理员密钥。重复账号会由目标账号池自动跳过。`)) return;
+  const oldLabel = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = '导入中...'; }
+  try {
+    const r = await api('/api/jobs/import-chatgpt2api', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(importAll ? {all_success: true} : {job_ids: ids}),
+    });
+    const localSkipped = (r.skipped_local || []).length;
+    showToast(`ChatGPT2API 导入完成：新增 ${r.added || 0}，重复跳过 ${r.skipped || 0}${localSkipped ? `，本地跳过 ${localSkipped}` : ''}`);
+  } catch (err) {
+    showToast('导入 ChatGPT2API 失败: ' + err.message);
+  } finally {
+    if (button) { button.textContent = oldLabel; button.disabled = false; }
+  }
 }
 
 async function downloadSelectedAccountTxt() {
@@ -4601,6 +4668,8 @@ async function copyCurrentPageLines() {
   bind('btnCopyAllTokensV2', copyCurrentPageTokens);
   bind('btnCopyAllLinesV2', copyCurrentPageLines);
   bind('btnDownloadSelectedTxtV2', downloadSelectedAccountTxt);
+  bind('btnImportSelectedChatgpt2ApiV2', importSelectedAccountsToChatgpt2Api);
+  bind('btnImportAllChatgpt2ApiV2', importAllAccountsToChatgpt2Api);
   bind('btnArchiveSelectedAccountsV2', archiveSelectedAccounts);
   bind('btnDeleteSelectedAccountsV2', deleteSelectedAccounts);
 })();
@@ -5424,6 +5493,7 @@ function emailConfigSectionForKey(key) {
   }
   if (key.startsWith('GPTMAIL_')) return ['GPTMail', 'GPTMail 临时邮箱 API 配置'];
   if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢临时邮箱 API 配置'];
+  if (key.startsWith('MAILCX_')) return ['Mail.cx', 'Mail.cx 临时邮箱 API：随机地址与长轮询验证码'];
   if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
   if (key.startsWith('CLOUDFLARE_')) return ['Cloudflare 临时邮箱', 'Cloudflare Worker 临时邮箱 API、鉴权与路径配置'];
@@ -6020,7 +6090,7 @@ function renderConfigSectionV2(name, fields) {
       name,
       fields,
       emailConfigSectionForKey,
-      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
+      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'Mail.cx', 'CloudMail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
       { get: () => CONFIG_EMAIL_ACTIVE_SECTION_V2, set: v => { CONFIG_EMAIL_ACTIVE_SECTION_V2 = v; } },
       'email-section-v2'
     );

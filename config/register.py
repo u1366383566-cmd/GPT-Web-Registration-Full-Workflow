@@ -21,6 +21,11 @@ REGISTER_NAME = ""
 # 关闭后不会在注册完成后立刻访问 backend-api/accounts/check，后续可在账号列表手动查询。
 AUTO_PLAN_CHECK_AFTER_REGISTER = False
 
+# ChatGPT2API 本地账号池导入：由 WebUI 账号页调用；管理员密钥仅保存在 .env。
+CHATGPT2API_BASE_URL = "http://127.0.0.1:8021"
+CHATGPT2API_AUTH_KEY = ""
+CHATGPT2API_IMPORT_TIMEOUT = 20
+
 # 注册成功并拿到 accessToken 后，在浏览器里随机停留一段时间再关闭连接。
 # 格式：最小秒,最大秒。设为 "0,0" 表示不额外停留。
 POST_REGISTER_DWELL_SECONDS_RANGE = "18,45"
@@ -30,5 +35,8 @@ apply_env_overrides(globals(), {
     'REGISTER_EMAIL': 'str',
     'REGISTER_NAME': 'str',
     'AUTO_PLAN_CHECK_AFTER_REGISTER': 'bool',
+    'CHATGPT2API_BASE_URL': 'str',
+    'CHATGPT2API_AUTH_KEY': 'str',
+    'CHATGPT2API_IMPORT_TIMEOUT': 'int',
     'POST_REGISTER_DWELL_SECONDS_RANGE': 'str',
 })

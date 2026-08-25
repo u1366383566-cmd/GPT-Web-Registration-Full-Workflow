@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from flask import Flask, Response, jsonify, make_response, render_template, request
 
 from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service
+from core import chatgpt2api_client
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -284,7 +285,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         pool = {"total": 0, "available": 0, "used": 0, "failed": 0}
         for src in parse_email_sources(_email_cfg.EMAIL_SOURCE):
             # GPTMail/MailNest/CloudMail 地址按需生成，不属于本地邮箱池。
-            if src in ("gptmail", "mailnest", "cloudmail", "cloudflare"):
+            if src in ("gptmail", "mailnest", "cloudmail", "mailcx", "cloudflare"):
                 continue
             one = (
                 db.generic_api_email_pool_summary() if src == "generic_api"
@@ -402,6 +403,103 @@ def create_app(auth_code: str | None = None) -> Flask:
             else:
                 skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "值为空"})
         return jsonify({"ok": True, "field": field, "values": values, "count": len(values), "skipped": skipped})
+
+    @app.post("/api/accounts/import-chatgpt2api")
+    def api_accounts_import_chatgpt2api():
+        """Import selected registered accounts into the configured local ChatGPT2API pool."""
+        data = request.get_json(silent=True) or {}
+        import_all = bool(data.get("all"))
+        raw_ids = data.get("account_ids") or data.get("ids") or []
+        if import_all:
+            accounts = db.list_accounts(limit=5000, archived="0")
+            skipped = []
+        else:
+            if not isinstance(raw_ids, list) or not raw_ids:
+                return jsonify({"ok": False, "error": "请先选择要导入的账号"}), 400
+            if len(raw_ids) > 500:
+                return jsonify({"ok": False, "error": "单次最多导入 500 个账号"}), 400
+            accounts, skipped = [], []
+            seen = set()
+            for raw_id in raw_ids:
+                try:
+                    account_id = int(raw_id)
+                except (TypeError, ValueError):
+                    skipped.append({"id": raw_id, "reason": "ID 非法"})
+                    continue
+                if account_id in seen:
+                    continue
+                seen.add(account_id)
+                account = db.get_account(account_id)
+                if not account:
+                    skipped.append({"id": account_id, "reason": "账号不存在"})
+                elif account.get("archived"):
+                    skipped.append({"id": account_id, "email": account.get("email"), "reason": "账号已归档"})
+                else:
+                    accounts.append(account)
+        if not accounts:
+            return jsonify({"ok": False, "error": "没有可导入的未归档账号", "skipped": skipped}), 400
+        try:
+            result = chatgpt2api_client.import_accounts(accounts)
+        except chatgpt2api_client.ChatGPT2ApiImportError as exc:
+            return jsonify({"ok": False, "error": str(exc), "skipped": skipped}), 502
+        return jsonify({"ok": True, **result, "skipped_local": skipped})
+
+    @app.post("/api/jobs/import-chatgpt2api")
+    def api_jobs_import_chatgpt2api():
+        """Import accounts associated with successful registration jobs only."""
+        data = request.get_json(silent=True) or {}
+        import_all_success = bool(data.get("all_success"))
+        raw_ids = data.get("job_ids") or data.get("ids") or []
+        if import_all_success:
+            jobs = db.list_jobs(limit=5000)
+        else:
+            if not isinstance(raw_ids, list) or not raw_ids:
+                return jsonify({"ok": False, "error": "请先选择要导入的成功任务"}), 400
+            if len(raw_ids) > 500:
+                return jsonify({"ok": False, "error": "单次最多导入 500 个任务"}), 400
+            jobs = []
+            for raw_id in raw_ids:
+                try:
+                    job_id = int(raw_id)
+                except (TypeError, ValueError):
+                    jobs.append({"id": raw_id, "status": "invalid"})
+                    continue
+                jobs.append(db.get_job(job_id) or {"id": job_id, "status": "missing"})
+
+        accounts, skipped, seen_account_ids = [], [], set()
+        for job in jobs:
+            job_id = job.get("id")
+            if job.get("status") != "success":
+                skipped.append({"id": job_id, "reason": "任务不是成功状态"})
+                continue
+            account = None
+            account_id = job.get("account_id")
+            if account_id:
+                try:
+                    account = db.get_account(int(account_id))
+                except (TypeError, ValueError):
+                    account = None
+            if not account and job.get("email"):
+                account = db.get_account_by_email(str(job["email"]))
+            if not account:
+                skipped.append({"id": job_id, "reason": "未找到对应已注册账号"})
+                continue
+            if account.get("archived"):
+                skipped.append({"id": job_id, "email": account.get("email"), "reason": "账号已归档"})
+                continue
+            account_id = int(account.get("id") or 0)
+            if not account_id or account_id in seen_account_ids:
+                continue
+            seen_account_ids.add(account_id)
+            accounts.append(account)
+
+        if not accounts:
+            return jsonify({"ok": False, "error": "没有可导入的成功任务账号", "skipped_local": skipped}), 400
+        try:
+            result = chatgpt2api_client.import_accounts(accounts)
+        except chatgpt2api_client.ChatGPT2ApiImportError as exc:
+            return jsonify({"ok": False, "error": str(exc), "skipped_local": skipped}), 502
+        return jsonify({"ok": True, **result, "skipped_local": skipped})
 
     @app.post("/api/accounts/<int:acc_id>/archive")
     def api_account_archive(acc_id: int):
@@ -2239,7 +2337,14 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "ok": False,
                     "error": "已选择 cloudmail 邮箱来源，请填写 CloudMail Token（配置 → 邮箱 / OTP）。",
                 }), 400
-        if "gptmail" in sources or "mailnest" in sources or "cloudmail" in sources or "cloudflare" in sources:
+        if "mailcx" in sources:
+            token = str(getattr(_email_cfg, "MAILCX_API_TOKEN", "") or "").strip()
+            if not token:
+                return jsonify({
+                    "ok": False,
+                    "error": "已选择 mailcx 邮箱来源，请填写 Mail.cx API Token（配置 → 邮箱 / OTP）。",
+                }), 400
+        if "gptmail" in sources or "mailnest" in sources or "cloudmail" in sources or "mailcx" in sources or "cloudflare" in sources:
             # 临时邮箱在任务开始时动态生成，不需要本地邮箱池容量提示。
             warning = ""
         elif "cloudflare_domain" in sources:
