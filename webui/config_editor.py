@@ -56,6 +56,26 @@ EDITABLE_FIELDS = [
         "label": "导入超时(秒)", "help": "调用 ChatGPT2API 账号导入接口的最长等待时间，建议保留 20",
         "storage": "env",
     },
+    {
+        "key": "CHATGPT2API_NEW_BASE_URL", "file": "register.py", "type": "str", "group": "ChatGPT2API",
+        "label": "新版反代地址", "help": "3.x 新版服务地址，例如 http://127.0.0.1:18765；选新版或双目标导入时必填",
+        "storage": "env",
+    },
+    {
+        "key": "CHATGPT2API_NEW_AUTH_KEY", "file": "register.py", "type": "str", "group": "ChatGPT2API",
+        "label": "新版管理员密钥", "help": "新版服务的管理员访问密钥；仅保存到本项目 .env，不会发送到浏览器",
+        "storage": "env", "secret": True,
+    },
+    {
+        "key": "CHATGPT2API_NEW_IMPORT_TIMEOUT", "file": "register.py", "type": "int", "group": "ChatGPT2API",
+        "label": "新版超时(秒)", "help": "调用新版账号导入接口的最长等待时间，建议保留 20",
+        "storage": "env",
+    },
+    {
+        "key": "CHATGPT2API_IMPORT_TARGET", "file": "register.py", "type": "str", "group": "ChatGPT2API",
+        "label": "默认导入目标", "help": "legacy=旧版；new=新版；both=旧版+新版。一键导入时可临时切换",
+        "storage": "env",
+    },
     # ---- 功能开关 ----
     {
         "key": "ENABLE_CODEX_AUTO", "file": "codex.py", "type": "bool", "group": "功能开关",

@@ -370,6 +370,11 @@
       display: inline-flex; align-items: center; gap: 8px;
       color: #606266; font-size: 14px; white-space: nowrap;
     }
+    .jobs-toolbar-v2 .jobs-tb-field select {
+      height: 32px; padding: 0 8px;
+      border: 1px solid #dcdfe6; border-radius: 6px;
+      background: #fff; color: #606266; font: inherit; font-size: 13px;
+    }
     .accounts-filter-v2 .acc-v2-date {
       height: 40px; padding: 0 8px;
       border: 1px solid #dcdfe6; border-radius: 6px;
@@ -1781,6 +1786,10 @@
       line-height: 1.45; white-space: normal; overflow: visible;
       overflow-wrap: anywhere; word-break: break-word;
     }
+    .config-pool-subhead-v2 {
+      grid-column: 1 / -1; margin: 10px 0 -4px;
+      font-size: 14px; font-weight: 700; color: #303133;
+    }
     .config-section-v2-actions {
       margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px;
     }
@@ -2055,6 +2064,13 @@
         <button type="button" class="jobs-tb-btn" id="btnCancelPendingV2" title="把所有排队任务标记为已取消">取消全部排队</button>
         <button type="button" class="jobs-tb-btn" id="btnRefreshJobsV2" title="手动刷新任务列表">刷新</button>
         <button type="button" class="jobs-tb-btn" id="btnImportAllSuccessJobsChatgpt2ApiV2" title="将所有成功任务对应的账号导入 ChatGPT2API">一键导入成功账号</button>
+        <label class="jobs-tb-field">导入目标
+          <select data-chatgpt-import-target aria-label="ChatGPT2API 导入目标">
+            <option value="legacy">旧版反代</option>
+            <option value="new">新版反代</option>
+            <option value="both">旧版 + 新版</option>
+          </select>
+        </label>
         <label class="jobs-tb-field">注册数量
           <span class="el-input-number">
             <input id="regCountV2" type="number" min="1" max="200" value="1" inputmode="numeric">
@@ -2178,8 +2194,15 @@
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedLinesV2" disabled title="复制选中账号的完整整行，每个账号一行">复制行</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedTokensV2" disabled title="复制选中账号的 Token，每个账号一行">复制Token</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedEmailsV2" disabled title="复制选中账号的邮箱，每个账号一行">复制邮箱</button>
-           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedTxtV2" disabled title="把选中账号的完整整行保存为 TXT 文件，每个账号一行">下载TXT</button>
-           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnImportSelectedChatgpt2ApiV2" disabled title="把选中账号直接导入已配置的 ChatGPT2API 账号池">导入ChatGPT2API</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedTxtV2" disabled title="把选中账号的完整整行保存为 TXT 文件，每个账号一行">下载TXT</button>
+          <label class="jobs-tb-field">目标
+            <select data-chatgpt-import-target aria-label="ChatGPT2API 导入目标">
+              <option value="legacy">旧版</option>
+              <option value="new">新版</option>
+              <option value="both">两版</option>
+            </select>
+          </label>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnImportSelectedChatgpt2ApiV2" disabled title="把选中账号直接导入已配置的 ChatGPT2API 账号池">导入ChatGPT2API</button>
            <button type="button" class="jobs-tb-btn" id="btnArchiveSelectedAccountsV2" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档选中</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedAccountsV2" disabled title="删除选中的本地账号/token记录">删除</button>
         </div>
@@ -2656,7 +2679,7 @@ async function copyText(text) {
 async function api(url, opts) {
   const r = await fetch(url, opts);
   const j = await r.json().catch(()=>({}));
-  if (!r.ok) throw new Error(j.error || ('HTTP '+r.status));
+  if (!r.ok && r.status !== 207) throw new Error(j.error || ('HTTP '+r.status));
   return j;
 }
 function debounce(fn, wait=250) {
@@ -4021,20 +4044,71 @@ function copySelectedAccountEmails() {
   showToast(`已复制 ${emails.length} 个邮箱`);
 }
 
+function chatgptImportTargetValue() {
+  const saved = String((CONFIG || []).find(f => f.key === 'CHATGPT2API_IMPORT_TARGET')?.value || 'legacy').toLowerCase();
+  const stored = localStorage.getItem('gpt_chatgpt2api_import_target');
+  return ['legacy', 'new', 'both'].includes(stored) ? stored : (['legacy', 'new', 'both'].includes(saved) ? saved : 'legacy');
+}
+
+function syncChatgptImportTargets() {
+  const value = chatgptImportTargetValue();
+  document.querySelectorAll('[data-chatgpt-import-target]').forEach(select => {
+    select.value = value;
+  });
+}
+
+async function probeChatgptTargetsAfterSave(updatedKeys) {
+  const relevant = ['CHATGPT2API_BASE_URL', 'CHATGPT2API_NEW_BASE_URL', 'CHATGPT2API_IMPORT_TARGET'];
+  if (!(updatedKeys || []).some(key => relevant.includes(key))) return [];
+  try {
+    const target = chatgptImportTargetValue();
+    const result = await api('/api/chatgpt2api/probe', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({target}),
+    });
+    const warnings = [];
+    (result.targets || []).forEach(item => {
+      if (!item.ok) { warnings.push(`${item.label}服务探测失败：${item.error || '无法读取版本'}`); return; }
+      const major = Number.parseInt(String(item.version || '').split('.')[0], 10);
+      const expected = item.target === 'legacy' ? 1 : 3;
+      if (Number.isFinite(major) && major !== expected) {
+        warnings.push(`${item.label}探测到版本 ${item.version}，可能与所选目标不一致`);
+      }
+    });
+    return warnings;
+  } catch (err) {
+    return [`导入目标探测失败：${err.message}`];
+  }
+}
+
+function formatChatgptImportResult(result) {
+  const targets = Array.isArray(result.targets) ? result.targets : [];
+  if (targets.length <= 1) {
+    return `新增 ${result.added || 0}，重复跳过 ${result.skipped || 0}${result.errors ? `，失败 ${result.errors}` : ''}`;
+  }
+  const parts = targets.map(item => `${item.label}：新增 ${item.added || 0}，跳过 ${item.skipped || 0}`);
+  if ((result.target_errors || []).length) {
+    parts.push(`失败目标：${result.target_errors.map(item => item.label).join('、')}`);
+  }
+  return parts.join('；');
+}
+
 async function importAccountsToChatgpt2Api(accountIds, button = null, importAll = false) {
   const ids = Array.from(new Set((accountIds || []).map(Number).filter(Number.isFinite)));
   if (!importAll && !ids.length) { showToast('请先选择账号'); return; }
+  const target = chatgptImportTargetValue();
+  const targetLabel = {legacy: '旧版反代', new: '新版反代', both: '旧版 + 新版反代'}[target];
   const countLabel = importAll ? '全部未归档成功账号' : `选中的 ${ids.length} 个账号`;
-  if (!confirm(`确定将${countLabel}导入 ChatGPT2API 吗？\n\n将使用配置页中保存的本地 ChatGPT2API 地址和管理员密钥。重复账号会由目标账号池自动跳过。`)) return;
+  if (!confirm(`确定将${countLabel}导入 ${targetLabel}吗？\n\n将使用配置页中保存的对应地址和管理员密钥。重复账号会由目标账号池自动跳过。`)) return;
   const oldLabel = button ? button.textContent : '';
   if (button) { button.disabled = true; button.textContent = '导入中...'; }
   try {
     const r = await api('/api/accounts/import-chatgpt2api', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(importAll ? {all: true} : {account_ids: ids}),
+      body: JSON.stringify({...(importAll ? {all: true} : {account_ids: ids}), target}),
     });
     const localSkipped = (r.skipped_local || []).length;
-    showToast(`ChatGPT2API 导入完成：新增 ${r.added || 0}，重复跳过 ${r.skipped || 0}${localSkipped ? `，本地跳过 ${localSkipped}` : ''}`);
+    showToast(`导入完成：${formatChatgptImportResult(r)}${localSkipped ? `，本地跳过 ${localSkipped}` : ''}`);
   } catch (err) {
     showToast('导入 ChatGPT2API 失败: ' + err.message);
   } finally {
@@ -4054,17 +4128,19 @@ async function importAllAccountsToChatgpt2Api() {
 async function importSuccessfulJobsToChatgpt2Api(jobIds, button = null, importAll = false) {
   const ids = Array.from(new Set((jobIds || []).map(Number).filter(Number.isFinite)));
   if (!importAll && !ids.length) { showToast('请先选择成功任务'); return; }
+  const target = chatgptImportTargetValue();
+  const targetLabel = {legacy: '旧版反代', new: '新版反代', both: '旧版 + 新版反代'}[target];
   const countLabel = importAll ? '全部成功任务对应的账号' : `任务 #${ids.join('、#')} 对应的账号`;
-  if (!confirm(`确定将${countLabel}导入 ChatGPT2API 吗？\n\n将使用配置页中保存的本地 ChatGPT2API 地址和管理员密钥。重复账号会由目标账号池自动跳过。`)) return;
+  if (!confirm(`确定将${countLabel}导入 ${targetLabel}吗？\n\n将使用配置页中保存的对应地址和管理员密钥。重复账号会由目标账号池自动跳过。`)) return;
   const oldLabel = button ? button.textContent : '';
   if (button) { button.disabled = true; button.textContent = '导入中...'; }
   try {
     const r = await api('/api/jobs/import-chatgpt2api', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(importAll ? {all_success: true} : {job_ids: ids}),
+      body: JSON.stringify({...(importAll ? {all_success: true} : {job_ids: ids}), target}),
     });
     const localSkipped = (r.skipped_local || []).length;
-    showToast(`ChatGPT2API 导入完成：新增 ${r.added || 0}，重复跳过 ${r.skipped || 0}${localSkipped ? `，本地跳过 ${localSkipped}` : ''}`);
+    showToast(`导入完成：${formatChatgptImportResult(r)}${localSkipped ? `，本地跳过 ${localSkipped}` : ''}`);
   } catch (err) {
     showToast('导入 ChatGPT2API 失败: ' + err.message);
   } finally {
@@ -5598,6 +5674,7 @@ function configSectionIntro(name) {
   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
   if (name === '功能开关') return '';
   if (name === '注册方式') return '选择账号注册时使用的自动化方式。';
+  if (name === 'ChatGPT2API') return '分别配置旧版和新版反代，一键导入时按目标分发账号。';
   if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';
   if (name === 'Browser Use') return 'Browser Use Cloud 远端浏览器与代理参数。';
   if (name === 'Skyvern') return 'Skyvern Browser Sessions 与代理参数。';
@@ -5805,6 +5882,50 @@ function renderMixedConfigSectionV2(name, fields, intro) {
       ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
       <div class="config-section-v2-actions">
         <button type="button" class="btn primary" data-save-config-v2>保存</button>
+      </div>
+    </section>
+  `;
+}
+
+function chatgptPoolConfigField(fields, key, label = null) {
+  const field = fields.find(f => f.key === key);
+  return field ? renderConfigPlainFieldV2({...field, ...(label ? {label} : {})}) : '';
+}
+
+function renderChatgptPoolConfigSection(fields, intro) {
+  const slug = configGroupSlug('ChatGPT2API');
+  const targetKey = 'CHATGPT2API_IMPORT_TARGET';
+  const targetField = fields.find(f => f.key === targetKey);
+  const targetValue = String(targetField?.value || 'legacy').toLowerCase();
+  const targetChoices = [
+    {value: 'legacy', label: '旧版反代'},
+    {value: 'new', label: '新版反代'},
+    {value: 'both', label: '旧版 + 新版'},
+  ];
+  return `
+    <section class="config-section-v2" id="${esc(slug)}" data-config-section="ChatGPT2API">
+      ${renderConfigSectionHead('ChatGPT2API', intro || '')}
+      <div class="config-section-v2-body config-section-v2-body--single">
+        <label class="fld config-select-v2-field">
+          默认导入目标
+          <span class="hint">一键导入默认分发方式；账号页和任务页可临时选择目标</span>
+          <select data-key="${attrEsc(targetKey)}">
+            ${targetChoices.map(choice => `<option value="${choice.value}"${choice.value === targetValue ? ' selected' : ''}>${esc(choice.label)}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+      <div class="config-section-v2-body" style="margin-top:16px;">
+        <div class="config-pool-subhead-v2">旧版（1.x）</div>
+        ${chatgptPoolConfigField(fields, 'CHATGPT2API_BASE_URL', '服务地址')}
+        ${chatgptPoolConfigField(fields, 'CHATGPT2API_AUTH_KEY', '管理员密钥')}
+        ${chatgptPoolConfigField(fields, 'CHATGPT2API_IMPORT_TIMEOUT', '导入超时(秒)')}
+        <div class="config-pool-subhead-v2">新版（3.x）</div>
+        ${chatgptPoolConfigField(fields, 'CHATGPT2API_NEW_BASE_URL', '服务地址')}
+        ${chatgptPoolConfigField(fields, 'CHATGPT2API_NEW_AUTH_KEY', '管理员密钥')}
+        ${chatgptPoolConfigField(fields, 'CHATGPT2API_NEW_IMPORT_TIMEOUT', '导入超时(秒)')}
+      </div>
+      <div class="config-section-v2-actions">
+        <button type="button" class="btn primary" data-save-config-v2>保存并探测版本</button>
       </div>
     </section>
   `;
@@ -6082,6 +6203,9 @@ function renderConfigSectionV2(name, fields) {
       </section>
     `;
   }
+  if (name === 'ChatGPT2API') {
+    return renderChatgptPoolConfigSection(fields, configSectionIntro(name));
+  }
   if (name === 'Codex') {
     return renderCodexSectionV2(fields);
   }
@@ -6126,6 +6250,7 @@ function renderConfigLayoutV2() {
   `).join('');
   sections.innerHTML = names.map(name => renderConfigSectionV2(name, groups[name] || [])).join('');
   renderRegistrationDriverCard();
+  syncChatgptImportTargets();
   const sectionMount = document.getElementById('configRegistrationSelectV2');
   if (sectionMount) renderRegistrationEpSelect(sectionMount, 'configRegistrationSelectV2');
   bindRoxyWorkspaceToolsV2();
@@ -6327,7 +6452,8 @@ async function saveConfigUpdates(triggerBtn) {
     const r = await api('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({updates}) });
     for (const [k, v] of Object.entries(updates)) { const f = CONFIG.find(x => x.key === k); if (f) f.value = v; delete CONFIG_PENDING_UPDATES[k]; }
     renderConfigLayoutV2();
-    showToast(r.reloaded ? '配置已生效' : '配置已保存（需重启）');
+    const warnings = await probeChatgptTargetsAfterSave(Object.keys(updates));
+    showToast([r.reloaded ? '配置已生效' : '配置已保存（需重启）', ...warnings].filter(Boolean).join('；'));
   } catch(e) { showToast('保存失败: ' + e.message); }
   finally { buttons.forEach(btn => { btn.disabled = false; }); }
 }
@@ -6344,8 +6470,17 @@ document.addEventListener('click', (e) => {
   copyText(copyStore.get(t.dataset.copyId));
 });
 
+// ---------- ChatGPT2API 导入目标 ----------
+document.addEventListener('change', (e) => {
+  const select = e.target.closest('[data-chatgpt-import-target]');
+  if (!select || !['legacy', 'new', 'both'].includes(select.value)) return;
+  localStorage.setItem('gpt_chatgpt2api_import_target', select.value);
+  document.querySelectorAll('[data-chatgpt-import-target]').forEach(item => { item.value = select.value; });
+});
+
 // ---------- 初始化 ----------
 loadSummary();
+syncChatgptImportTargets();
 activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false);
 jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 10000);
 setInterval(loadSummary, 30000);

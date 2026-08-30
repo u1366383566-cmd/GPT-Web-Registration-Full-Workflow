@@ -27,6 +27,14 @@ from webui import config_editor
 
 logger = logging.getLogger(__name__)
 
+
+def _chatgpt_import_target(data: dict) -> str:
+    try:
+        return chatgpt2api_client.resolve_target(data.get("target"))
+    except chatgpt2api_client.ChatGPT2ApiImportError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def _pool_source_arg(default: str = "outlook") -> str:
     src = (request.args.get("source") or "").strip()
     if not src and request.method == "POST":
@@ -439,10 +447,14 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not accounts:
             return jsonify({"ok": False, "error": "没有可导入的未归档账号", "skipped": skipped}), 400
         try:
-            result = chatgpt2api_client.import_accounts(accounts)
+            target = _chatgpt_import_target(data)
+            result = chatgpt2api_client.import_accounts(accounts, target=target)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc), "skipped": skipped}), 400
         except chatgpt2api_client.ChatGPT2ApiImportError as exc:
             return jsonify({"ok": False, "error": str(exc), "skipped": skipped}), 502
-        return jsonify({"ok": True, **result, "skipped_local": skipped})
+        status_code = 207 if result.get("partial_success") else 200
+        return jsonify({"ok": True, **result, "skipped_local": skipped}), status_code
 
     @app.post("/api/jobs/import-chatgpt2api")
     def api_jobs_import_chatgpt2api():
@@ -496,10 +508,26 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not accounts:
             return jsonify({"ok": False, "error": "没有可导入的成功任务账号", "skipped_local": skipped}), 400
         try:
-            result = chatgpt2api_client.import_accounts(accounts)
+            target = _chatgpt_import_target(data)
+            result = chatgpt2api_client.import_accounts(accounts, target=target)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc), "skipped_local": skipped}), 400
         except chatgpt2api_client.ChatGPT2ApiImportError as exc:
             return jsonify({"ok": False, "error": str(exc), "skipped_local": skipped}), 502
-        return jsonify({"ok": True, **result, "skipped_local": skipped})
+        status_code = 207 if result.get("partial_success") else 200
+        return jsonify({"ok": True, **result, "skipped_local": skipped}), status_code
+
+    @app.post("/api/chatgpt2api/probe")
+    def api_chatgpt2api_probe():
+        data = request.get_json(silent=True) or {}
+        try:
+            probes = chatgpt2api_client.probe_targets(_chatgpt_import_target(data))
+        except (ValueError, chatgpt2api_client.ChatGPT2ApiImportError) as exc:
+            return jsonify({"ok": False, "error": str(exc), "targets": []}), 400
+        return jsonify({
+            "ok": all(item.get("ok") for item in probes),
+            "targets": probes,
+        })
 
     @app.post("/api/accounts/<int:acc_id>/archive")
     def api_account_archive(acc_id: int):
