@@ -605,11 +605,11 @@ def main():
 
     if args.workers > 1:
         batch_dir = create_batch_archive_dir(args.count, args.workers)
-        logger.info(f"[批量] 本批次归档目录：{batch_dir}")
+        logger.info("[批量] 账号数据将直接写入 SQLite")
         results = run_parallel_batch(args.count, args.workers, args.delay, args.continue_on_fail, batch_dir)
     else:
         batch_dir = create_batch_archive_dir(args.count, args.workers)
-        logger.info(f"[批量] 本批次归档目录：{batch_dir}")
+        logger.info("[批量] 账号数据将直接写入 SQLite")
         results = run_serial_batch(args.count, args.delay, args.continue_on_fail, batch_dir)
 
     success_count = sum(1 for r in results if _is_success(r))

@@ -72,7 +72,7 @@ EMAIL_SOURCE = "outlook,generic_api"
   - GrizzlySMS
   - 本地 L 取号服务，见 `L_API.md`
 - 手机验证支持自动取号、填号、收码、提交、失败换号重试。
-- Codex 凭证落盘到 `codex_accounts/`。
+- Codex 凭证保存到 SQLite 的 `codex_accounts` 表。
 
 ### WebUI
 
@@ -83,6 +83,13 @@ EMAIL_SOURCE = "outlook,generic_api"
 - 管理账号、邮箱池、Codex 凭证；账号页支持复制全部/选中整行，邮箱池列表展示导入时间、已用时间和状态。
 - 配置页支持热加载，保存后无需重启。
 - Roxy 团队/项目可在配置页获取并保存。
+
+### 数据存储
+
+- 账号、邮箱库、任务及 Codex 凭证运行时统一存储在项目根目录 `turb.sqlite3`，按业务拆分为 `accounts`、`email_pool`（邮箱库）、`registration_jobs`、`codex_accounts` 和 `codex_agent_accounts` 五张表。
+- 数据库启用 WAL、超时等待和常用字段索引，WebUI 的账号、套餐状态、邮箱库、Codex 和任务分页直接执行 SQLite `COUNT(*) + LIMIT/OFFSET`，不再先读取全量数据后由 Python 切片。
+- 首次启动会自动把现有 JSON/历史 SQLite 数据迁移到新数据库；迁移完成后不再读写账号、任务、邮箱池和 Codex 凭证 JSON/TXT 文件。
+- `turb.sqlite3*` 属于运行时数据，已加入 `.gitignore`，请纳入备份策略。
 
 ---
 
@@ -487,7 +494,7 @@ WebUI 页面说明：
 |---|---|
 | 注册 | 设置注册数量、线程数，启动批量注册，查看任务和日志 |
 | 账号 | 查看账号、复制 token、补跑 Codex、批量删除账号 |
-| Codex 授权 | 查看/下载/删除 `codex_accounts/` 凭证 |
+| Codex 授权 | 查看/下载/删除 SQLite 中的 Codex 凭证 |
 | 邮箱池 | 导入邮箱、筛选来源、标记可用/失败、删除邮箱 |
 | 配置 | 修改运行配置并热加载，含 Roxy、Codex、邮箱、代理、人工节奏等 |
 
@@ -578,7 +585,7 @@ REGISTER_PASSWORD = "你的固定密码"
 保存位置：
 
 - 账号 `extra_json.registration_password`
-- 批次归档 `accounts/YYYYMMDD-.../注册成功账号.json` 的 `extra.registration_password`
+- SQLite `accounts.payload` 中的 `extra_json.registration_password`
 
 注意：账号表里的 `password` 字段仍用于 Outlook 邮箱素材密码，不会被 OpenAI 注册密码覆盖。
 
@@ -608,25 +615,9 @@ WebUI 配置页保存后会调用热加载；Roxy、Codex、邮箱、代理、�
 
 | 路径 | 内容 |
 |---|---|
-| `用于注册的邮箱.txt/json` | Outlook 邮箱池及状态 |
-| `用于注册的API邮箱.txt/json` | 通用 API 邮箱池及状态 |
-| `注册成功的邮箱.txt/json` | 注册成功账号 |
-| `注册成功的token.txt` | ChatGPT access token |
-| `accounts/` | 每次运行的批次归档 |
-| `codex_accounts/` | Codex OAuth 凭证 JSON |
-| `注册任务.json` | WebUI 注册任务表 |
+| `turb.sqlite3` | 账号、邮箱库、任务、Codex 和 Agent 凭证全部数据 |
+| 旧 JSON/TXT/Codex 文件 | 仅用于首次迁移，运行期间不再读写 |
 | `注册日志/` | 注册任务日志、Codex 补跑日志 |
-| `accounts_viewer.html` | 本地账号查看页 |
-
-批次目录示例：
-
-```text
-accounts/20260709-10个-3线程/
-├── 注册成功的邮箱.txt
-├── 注册成功的token.txt
-├── 注册成功整行.txt
-└── 注册成功账号.json
-```
 
 ---
 
@@ -657,7 +648,7 @@ accounts/20260709-10个-3线程/
   ↓
 可选 Codex OAuth
   ↓
-保存账号与批次归档
+保存账号到 SQLite
   ↓
 关闭/删除 Roxy Profile
 ```
@@ -677,7 +668,7 @@ Roxy 打开授权页
   ↓
 提交 callback 给 CPA 或本地换 token
   ↓
-保存 codex_accounts/codex-邮箱*.json
+保存 Codex 凭证到 SQLite
 ```
 
 ---
@@ -765,8 +756,8 @@ ENABLE_CODEX_AUTO = False
 │   ├── email_provider.py           # 邮箱来源调度
 │   ├── cf_temp_mail_client.py      # Cloudflare Worker 临时邮箱
 │   ├── sms_provider.py             # 接码平台
-│   ├── account_export.py           # 保存账号/批次归档
-│   └── db.py                       # 文件数据库
+│   ├── account_export.py           # 注册后处理与 SQLite 保存
+│   └── db.py                       # SQLite 数据库与一次性迁移
 ├── webui/
 │   ├── app.py                      # Flask API
 │   ├── config_editor.py            # 配置读写/热加载

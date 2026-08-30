@@ -1196,7 +1196,11 @@ def _wait_after_email_otp_submit(driver, timeout: int = 30) -> str:
 def _click_continue(driver) -> None:
     _click_any(driver, [
         "button[type='submit']",
+        "//button[@data-dd-action-name='Continue']",
+        "//button[@data-dd-action-name='continue']",
+        "//button[@data-login-web-auth-control='true' and @type='submit']",
         "//button[contains(., 'Continue')]",
+        "//button[contains(., '続行')]",
         "//button[contains(., '继续')]",
         "//button[contains(., 'Sign up')]",
         "//button[contains(., 'Create')]",
@@ -1643,12 +1647,63 @@ def _click_passwordless_signup_if_present(driver) -> dict:
         return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
 
 
+def _click_continue_with_password_if_present(driver) -> dict:
+    """在邮箱验证码页点击“使用密码继续”，进入 /create-account/password。"""
+    try:
+        result = driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const enabled = el => !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+        const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+        const candidates = [...document.querySelectorAll('a,button,[role="link"],[role="button"]')].filter(el => visible(el) && enabled(el));
+        const isPasswordCreate = el => {
+          const href = String(el.getAttribute('href') || '').toLowerCase();
+          const attrs = [
+            href, el.id, el.getAttribute('aria-label'), el.getAttribute('title'),
+            el.getAttribute('data-testid'), el.getAttribute('data-login-web-auth-control'),
+            el.getAttribute('data-dd-action-name'), el.className, el.textContent
+          ].join(' ').toLowerCase();
+          const text = norm(el.textContent || '');
+          return (
+            href.includes('/create-account/password') ||
+            attrs.includes('/create-account/password') ||
+            attrs.includes("data-dd-action-name") ||
+            text.includes('continuewithpassword') ||
+            text.includes('continuewithapassword')
+          );
+        };
+        const btn = candidates.find(isPasswordCreate);
+        if (!btn) return {ok:false, reason:'missing_continue_with_password'};
+        btn.scrollIntoView({block:'center'});
+        return {
+          ok:true,
+          reason:'continue_with_password_target',
+          button: btn,
+          href: btn.getAttribute('href') || '',
+          text: (btn.textContent || '').trim().slice(0, 80)
+        };
+        """) or {"ok": False, "reason": "empty_result"}
+        if result.get("ok") and result.get("button"):
+            _human_click(driver, result.get("button"), label="continue_with_password")
+            result["reason"] = "clicked_continue_with_password"
+            result.pop("button", None)
+        return result
+    except Exception as exc:
+        return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
 def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str | None:
     """邮箱提交后兼容 create-account/password。返回本次设置的 OpenAI 账号密码；未遇到密码页返回 None。"""
     end = time.time() + timeout
     last = {}
     while time.time() < end:
         if _is_email_verification_page(driver):
+            result = _click_continue_with_password_if_present(driver)
+            if result.get("ok"):
+                logger.info("%s 邮箱验证码页已点击“使用密码继续”：email=%s detail=%s", _log_prefix(driver), email, result)
+                time.sleep(0.8)
+                continue
+            logger.info("%s 已在邮箱验证码页，但未找到“使用密码继续”按钮：detail=%s", _log_prefix(driver), result)
             return None
         if _has_access_token(driver):
             return None
@@ -1658,7 +1713,7 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
         if not (is_signup_password or is_login_password):
             time.sleep(0.5)
             continue
-        passwordless = _click_passwordless_signup_if_present(driver)
+        passwordless = _click_passwordless_signup_if_present(driver) if is_login_password else {"ok": False, "reason": "signup_password_prefers_password"}
         if passwordless.get('ok'):
             logger.info("%s 检测到 password 页，已点击一次性验证码入口：email=%s detail=%s", _log_prefix(driver), email, passwordless)
             wait_end = time.time() + 20
@@ -1702,11 +1757,54 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
         if not result.get('ok'):
             raise RuntimeError(f"密码页处理失败：{result} state={last}")
         _human_type_text(driver, result.get("input"), password, clear=True)
-        human_delay("form", minimum=0.4, maximum=1.4)
-        _human_click(driver, result.get("button"), label="password_submit")
-        logger.info("%s 已填写并提交密码页", _log_prefix(driver))
+        # React/Auth0 会在 input/change 后异步校验密码强度并启用 Continue。
+        # 之前输入完 0.4~1.4s 就点，偶发点在按钮还未真正可提交/事件未绑定完成时，页面无反应。
+        human_delay("form", minimum=2.0, maximum=3.6)
+        submit_result = driver.execute_script(r"""
+        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+        const enabled = el => !!el && !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+        const pass = [...document.querySelectorAll('input[type="password"],input[name*="password" i],input[autocomplete="new-password"]')]
+          .find(el => visible(el) && !el.disabled && !el.readOnly);
+        const form = pass ? pass.closest('form') : document.querySelector('form');
+        const scope = form || document;
+        const candidates = [...scope.querySelectorAll('button,input[type="submit"],[role="button"]')]
+          .filter(el => visible(el) && enabled(el));
+        const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+        const scored = candidates.map((el, idx) => {
+          const attrs = [
+            el.getAttribute('type'), el.getAttribute('data-dd-action-name'),
+            el.getAttribute('data-login-web-auth-control'), el.getAttribute('aria-label'),
+            el.getAttribute('name'), el.getAttribute('value'), el.textContent
+          ].join(' ').toLowerCase();
+          const text = norm(el.textContent || el.getAttribute('value') || '');
+          let score = 0;
+          if ((el.getAttribute('type') || '').toLowerCase() === 'submit') score += 80;
+          if ((el.getAttribute('data-dd-action-name') || '').toLowerCase() === 'continue') score += 90;
+          if (String(el.getAttribute('data-login-web-auth-control') || '').toLowerCase() === 'true') score += 70;
+          if (/continue|next|submit|create|続行/.test(attrs) || /continue|next|submit|create|続行/.test(text)) score += 50;
+          return {el, idx, score};
+        }).sort((a,b) => b.score - a.score || a.idx - b.idx);
+        const target = scored[0]?.el;
+        if (!target) return {ok:false, reason:'missing_enabled_submit'};
+        target.scrollIntoView({block:'center'});
+        return {
+          ok:true,
+          reason:'enabled_submit_target',
+          button: target,
+          text: (target.textContent || target.getAttribute('value') || '').trim().slice(0, 80),
+          type: target.getAttribute('type') || '',
+          dd: target.getAttribute('data-dd-action-name') || '',
+          ariaDisabled: target.getAttribute('aria-disabled') || ''
+        };
+        """) or {}
+        if not submit_result.get("ok") or not submit_result.get("button"):
+            raise RuntimeError(f"密码页找不到可点击的 Continue 按钮：{submit_result} state={_password_page_state(driver)}")
+        _human_click(driver, submit_result.get("button"), label="password_submit")
+        logger.info("%s 已填写并点击密码页 Continue：detail=%s", _log_prefix(driver), {k: v for k, v in submit_result.items() if k != "button"})
         # 提交密码后通常进入邮箱验证码页，最多等一段时间。
         wait_end = time.time() + 20
+        retried_submit = False
         while time.time() < wait_end:
             if _is_email_verification_page(driver):
                 logger.info("%s 密码提交后已进入邮箱验证码页", _log_prefix(driver))
@@ -1714,6 +1812,18 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
             if _has_access_token(driver):
                 logger.info("%s 密码提交后已检测到登录态", _log_prefix(driver))
                 return password
+            if not retried_submit and time.time() > wait_end - 15 and _is_signup_password_page(driver):
+                retried_submit = True
+                logger.info("%s 密码页点击后仍未跳转，等待后重试一次 Continue/Enter", _log_prefix(driver))
+                human_delay("form", minimum=1.2, maximum=2.2)
+                try:
+                    _click_continue(driver)
+                except Exception:
+                    try:
+                        from selenium.webdriver.common.keys import Keys
+                        driver.switch_to.active_element.send_keys(Keys.ENTER)
+                    except Exception:
+                        pass
             if not _is_signup_password_page(driver):
                 return password
             time.sleep(0.5)
@@ -2019,9 +2129,9 @@ def run_roxy_registration(email: str, name: str, birthday: str, proxy: str = Non
         next_state = _submit_email_and_wait_next(driver, email, attempts=3)
         _check_manual_stop()
 
-        # 新版注册流可能先进入 /create-account/password；参考 FlowPilot 的 fill-password 步骤，
-        # 先设置密码并提交，然后再等待邮箱验证码页。
-        openai_password = None if next_state == "otp" else _fill_password_page_if_present(driver, email, timeout=25)
+        # 新版注册流如果邮箱后直接进入验证码页，也优先点击“使用密码继续”进入
+        # /create-account/password，设置密码并把密码写入账号 extra.registration_password。
+        openai_password = _fill_password_page_if_present(driver, email, timeout=25)
         _check_manual_stop()
 
         current_otp = otp_code

@@ -738,7 +738,6 @@ def _submit_email_step_pw(page, email: str) -> bool:
             return `${own} ${desc}`.toLowerCase();
           };
           const formId = form.getAttribute('id') || '';
-          const all = [...document.querySelectorAll('button,input[type="submit"]')];
           const scoped = [
             ...form.querySelectorAll('button,input[type="submit"]'),
             ...(formId ? [...document.querySelectorAll(`button[form="${CSS.escape(formId)}"],input[type="submit"][form="${CSS.escape(formId)}"]`)] : [])
@@ -756,20 +755,45 @@ def _submit_email_step_pw(page, email: str) -> bool:
               const primary = (el.tagName === 'BUTTON' || el.tagName === 'INPUT') && type === 'submit'
                 && (/\bbtn-primary\b/.test(cls) || /\b_primary_/.test(cls) || /\bw-full\b/.test(cls));
               const score = (primary ? 1000 : 0) + (type === 'submit' ? 120 : 0) - distance;
-              return {el, idx: all.indexOf(el), attrs, hasLogo, bad: bad.test(attrs), belowInput, distance, primary, score, type};
+              return {el, attrs, hasLogo, bad: bad.test(attrs), belowInput, distance, primary, score, type};
             })
             .filter(x => visible(x.el) && !x.bad && !x.hasLogo && x.belowInput)
             .sort((a,b) => b.score - a.score || a.distance - b.distance);
-          if (!candidates.length) return {ok:false, reason:'missing_safe_submit', value, buttons: scoped.length};
-          const best = candidates[0];
-          best.el.scrollIntoView({block:'center', inline:'center'});
-          return {ok:true, idx:best.idx, value, reason:best.primary ? 'primary_submit' : 'safe_submit', attrs:best.attrs.slice(0,180)};
+          input.scrollIntoView({block:'center', inline:'nearest'});
+          input.focus();
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+          if (setter) setter.call(input, value); else input.value = value;
+          try { input.dispatchEvent(new InputEvent('beforeinput', {bubbles:true, cancelable:true, inputType:'insertText', data:value})); } catch (_) {}
+          try { input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:value})); } catch (_) {
+            input.dispatchEvent(new Event('input', {bubbles:true}));
+          }
+          input.dispatchEvent(new Event('change', {bubbles:true}));
+          input.dispatchEvent(new FocusEvent('blur', {bubbles:true}));
+          input.blur();
+          const submit = candidates[0] ? candidates[0].el : null;
+          if (submit) {
+            submit.scrollIntoView({block:'center', inline:'center'});
+            try {
+              submit.dispatchEvent(new MouseEvent('pointerdown', {bubbles:true, cancelable:true, view:window}));
+              submit.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
+              submit.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window}));
+              submit.click();
+            } catch (_) {
+              if (form && typeof form.requestSubmit === 'function') form.requestSubmit(submit);
+              else if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
+              else form.submit();
+            }
+            return {ok:true, value, reason:submit.tagName === 'BUTTON' ? 'button_click' : 'submit_click', attrs:candidates[0].attrs.slice(0,180)};
+          }
+          if (form && typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+            return {ok:true, value, reason:'form_requestSubmit', attrs:''};
+          }
+          form.submit();
+          return {ok:true, value, reason:'form_submit', attrs:''};
         }
         """, email) or {}
         if isinstance(result, dict) and result.get("ok"):
-            idx = int(result.get("idx") or 0)
-            loc = page.locator('button,input[type="submit"]').nth(idx)
-            _human_click_locator(loc, timeout=5000)
             logger.info("[BrowserUse] 邮箱表单安全提交：%s", result)
             _human_pause(0.8, 1.4)
             _assert_not_external_idp(page, "提交邮箱后")
@@ -865,6 +889,8 @@ def _wait_after_email_submit_transition(page, context=None, timeout: int = 14) -
         lower = url.lower()
         if "/log-in/password" in lower:
             return "login_password"
+        if any(x in lower for x in ("/create-account/password", "/u/signup/password", "/signup/password")):
+            return "password"
         if state in ("email_verification", "password", "login_password", "profile", "chatgpt"):
             return state
         if any(x in lower for x in ("email-verification", "/password", "about-you", "profile")):
@@ -919,6 +945,37 @@ def _is_password_page(page) -> bool:
         timeout_ms=500,
     )
     return loc is not None and "email-verification" not in url
+
+
+def _is_signup_password_page(page) -> bool:
+    """更稳妥地识别注册密码页：优先看 URL，其次看密码输入框。"""
+    try:
+        url = str(_page_url(page) or "").lower()
+    except Exception:
+        url = ""
+    if any(x in url for x in ("/create-account/password", "/u/signup/password", "/signup/password")):
+        return True
+    if "/log-in/password" in url:
+        return False
+    try:
+        state = _quick_auth_state(page)
+        if str(state.get("state") or "") == "password":
+            return True
+    except Exception:
+        pass
+    try:
+        loc = _visible_locator(
+            page,
+            [
+                "input[type='password']",
+                "input[name='password']",
+                "input[autocomplete='new-password']",
+            ],
+            timeout_ms=500,
+        )
+        return loc is not None and "email-verification" not in url
+    except Exception:
+        return False
 
 
 def _is_email_verification_page(page) -> bool:
@@ -1041,18 +1098,74 @@ def _click_passwordless_signup_if_present(page) -> bool:
         return False
 
 
+def _click_continue_with_password_if_present(page) -> bool:
+    """在邮箱验证码页点击“使用密码继续”，切到 /create-account/password 创建密码账号。"""
+    selectors = [
+        "a[href*='/create-account/password']",
+        "a[href='/create-account/password']",
+        "[data-login-web-auth-control='true'][href*='/create-account/password']",
+        "[role='link'][href*='/create-account/password']",
+        "[role='button'][href*='/create-account/password']",
+    ]
+    if _click_first(page, selectors, timeout_ms=1800):
+        return True
+    try:
+        return bool(page.evaluate(
+            """() => {
+              const visible = el => {
+                if (!el) return false;
+                const st = getComputedStyle(el);
+                const r = el.getBoundingClientRect();
+                return st.visibility !== 'hidden' && st.display !== 'none' && r.width > 0 && r.height > 0;
+              };
+              const enabled = el => !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+              const btn = [...document.querySelectorAll('a,button,[role="link"],[role="button"]')]
+                .filter(el => visible(el) && enabled(el))
+                .find(el => {
+                  const href = String(el.getAttribute('href') || '').toLowerCase();
+                  const attrs = [
+                    href, el.id, el.getAttribute('aria-label'), el.getAttribute('title'),
+                    el.getAttribute('data-testid'), el.getAttribute('data-login-web-auth-control'),
+                    el.getAttribute('data-dd-action-name'), el.className
+                  ].join(' ').toLowerCase();
+                  return href.includes('/create-account/password')
+                    || attrs.includes('/create-account/password');
+                });
+              if (!btn) return false;
+              btn.scrollIntoView({block:'center'});
+              try {
+                btn.dispatchEvent(new MouseEvent('pointerdown', {bubbles:true, cancelable:true, view:window}));
+                btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
+                btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window}));
+                btn.click();
+              } catch (e) {
+                const href = btn.getAttribute('href');
+                if (href) window.location.href = href;
+                else throw e;
+              }
+              return true;
+            }"""
+        ))
+    except Exception:
+        return False
+
+
 def _fill_password_if_present(page, email: str, timeout: int = 25, context=None) -> str | None:
     started = time.time()
     end = time.time() + timeout
     last_heartbeat = 0.0
     last_log = 0.0
     while time.time() < end:
-        # 邮箱提交后若已经在验证码页，直接跳过密码检测；避免 Skyvern 心跳/状态检查拖很久。
+        # 邮箱提交后若已经在验证码页，优先点击“使用密码继续”切到密码创建页。
         try:
-            quick = _quick_auth_state(page)
-            if str(quick.get("state") or "") == "email_verification":
-                logger.info("[BrowserUse] 已在邮箱验证码页，跳过密码页检测：url=%s", quick.get("url") or _page_url(page) or "-")
-                return None
+            if not _is_signup_password_page(page):
+                quick = _quick_auth_state(page)
+                if str(quick.get("state") or "") == "email_verification":
+                    if _click_continue_with_password_if_present(page):
+                        logger.info("[BrowserUse] 邮箱验证码页已点击“使用密码继续”：url=%s", quick.get("url") or _page_url(page) or "-")
+                        time.sleep(0.4 if _fast_mode() else 1.0)
+                        continue
+                    logger.info("[BrowserUse] 已在邮箱验证码页，但未找到“使用密码继续”按钮，继续等待密码页：url=%s", quick.get("url") or _page_url(page) or "-")
         except Exception:
             pass
         if time.time() - last_heartbeat > 3:
@@ -1068,12 +1181,25 @@ def _fill_password_if_present(page, email: str, timeout: int = 25, context=None)
                 raise
             last_heartbeat = time.time()
         state_info = _quick_auth_state(page)
-        state = str(state_info.get("state") or "other")
+        state = "password" if _is_signup_password_page(page) else str(state_info.get("state") or "other")
         if time.time() - last_log > 3:
             logger.info("[BrowserUse] 检测密码/验证码页：state=%s url=%s", state, state_info.get("url") or "-")
             last_log = time.time()
-        if state == "email_verification":
-            return None
+        if state == "email_verification" and not _is_signup_password_page(page):
+            if _click_continue_with_password_if_present(page):
+                logger.info("[BrowserUse] 邮箱验证码页已点击“使用密码继续”：email=%s", email)
+                time.sleep(0.4 if _fast_mode() else 1.0)
+                continue
+            try:
+                logger.info("[BrowserUse] 邮箱验证码页未命中按钮，直接跳转到密码页兜底：email=%s", email)
+                page.goto("https://auth.openai.com/create-account/password", wait_until="domcontentloaded", timeout=_timeout_ms(getattr(_cfg, "BROWSER_USE_NAVIGATION_TIMEOUT", 90)))
+                time.sleep(0.6 if _fast_mode() else 1.2)
+                continue
+            except Exception as exc:
+                logger.info("[BrowserUse] 邮箱验证码页兜底跳转密码页失败：%s", str(exc)[:180])
+                # 不要直接退出，继续等页面自己切到密码页
+                time.sleep(0.8 if _fast_mode() else 1.5)
+                continue
         if state not in ("password", "login_password"):
             # 提交邮箱后如果仍显示 /auth/login 但页面其实已经渲染验证码输入框，
             # 某些 Browser Use target 上 DOM 状态会短暂滞后。不要在“密码页检测”里长等，
@@ -1085,7 +1211,7 @@ def _fill_password_if_present(page, email: str, timeout: int = 25, context=None)
                 return None
             time.sleep(0.15 if _fast_mode() else 0.4)
             continue
-        if _click_passwordless_signup_if_present(page):
+        if state == "login_password" and _click_passwordless_signup_if_present(page):
             logger.info("[BrowserUse] 检测到密码页，已点击一次性验证码入口：state=%s email=%s", state, email)
             wait_end = time.time() + 20
             while time.time() < wait_end:
@@ -1106,34 +1232,112 @@ def _fill_password_if_present(page, email: str, timeout: int = 25, context=None)
             return None
         password = _registration_password()
         logger.info("[BrowserUse] 检测到密码页，设置密码（%s 位）：%s", len(password), email)
-        ok = _fill_first(
-            page,
-            [
-                "input[type='password']",
-                "input[name='password']",
-                "input[autocomplete='new-password']",
-                "input[autocomplete='current-password']",
-            ],
+        submit_result = page.evaluate(
+            r"""(password) => {
+              const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                && getComputedStyle(el).visibility !== 'hidden'
+                && getComputedStyle(el).display !== 'none'
+                && !el.disabled && !el.readOnly;
+              const enabled = el => !!el && !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
+              const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+              const inputs = [...document.querySelectorAll('input[type="password"],input[name*="password" i],input[autocomplete="new-password"]')]
+                .filter(visible);
+              const input = inputs[0];
+              if (!input) return {ok:false, reason:'missing_password_input', url: location.href};
+              const form = input.closest('form');
+              const scope = form || document;
+              const buttons = [...scope.querySelectorAll('button,input[type="submit"],[role="button"]')]
+                .filter(el => visible(el) && enabled(el))
+                .map((el, idx) => {
+                  const r = el.getBoundingClientRect();
+                  const ir = input.getBoundingClientRect();
+                  const attrs = [
+                    el.getAttribute('type'), el.getAttribute('data-dd-action-name'),
+                    el.getAttribute('data-login-web-auth-control'), el.getAttribute('aria-label'),
+                    el.getAttribute('name'), el.getAttribute('value'), el.textContent
+                  ].join(' ').toLowerCase();
+                  const text = norm(el.textContent || el.getAttribute('value') || '');
+                  let score = 0;
+                  if ((el.getAttribute('type') || '').toLowerCase() === 'submit') score += 80;
+                  if ((el.getAttribute('data-dd-action-name') || '').toLowerCase() === 'continue') score += 90;
+                  if (String(el.getAttribute('data-login-web-auth-control') || '').toLowerCase() === 'true') score += 70;
+                  if (/continue|next|submit|create|続行/.test(attrs) || /continue|next|submit|create|続行/.test(text)) score += 50;
+                  if (r.top >= ir.bottom - 10) score += 40;
+                  const dist = Math.max(0, r.top - ir.bottom) + Math.abs((r.left + r.right - ir.left - ir.right) / 2) / 10;
+                  return {el, idx, score, dist, attrs};
+                })
+                .sort((a,b) => b.score - a.score || a.dist - b.dist);
+              const target = buttons[0] ? buttons[0].el : null;
+              const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+              input.scrollIntoView({block:'center', inline:'nearest'});
+              input.focus();
+              if (setter) setter.call(input, String(password || '')); else input.value = String(password || '');
+              try { input.dispatchEvent(new InputEvent('beforeinput', {bubbles:true, cancelable:true, inputType:'insertText', data:String(password || '')})); } catch (_) {}
+              try { input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:String(password || '')})); } catch (_) {
+                input.dispatchEvent(new Event('input', {bubbles:true}));
+              }
+              input.dispatchEvent(new Event('change', {bubbles:true}));
+              input.dispatchEvent(new FocusEvent('blur', {bubbles:true}));
+              input.blur();
+              if (!target) {
+                if (form && typeof form.requestSubmit === 'function') {
+                  form.requestSubmit();
+                  return {ok:true, reason:'form_requestSubmit', url: location.href, hasForm: true, buttons: buttons.length};
+                }
+                if (form) {
+                  form.submit();
+                  return {ok:true, reason:'form_submit', url: location.href, hasForm: true, buttons: buttons.length};
+                }
+                return {ok:false, reason:'missing_enabled_submit', url: location.href, hasForm: !!form, buttons: buttons.length};
+              }
+              target.scrollIntoView({block:'center'});
+              try {
+                target.dispatchEvent(new MouseEvent('pointerdown', {bubbles:true, cancelable:true, view:window}));
+                target.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
+                target.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window}));
+                target.click();
+              } catch (e) {
+                if (form && typeof form.requestSubmit === 'function') form.requestSubmit(target);
+                else if (form) form.submit();
+                else throw e;
+              }
+              return {ok:true, reason:'button_click', url: location.href, hasForm: !!form, buttons: buttons.length, attrs: (buttons[0]?.attrs || '').slice(0, 180)};
+            }""",
             password,
-            timeout_ms=8000,
-        )
-        if not ok:
-            raise RuntimeError("密码页找到了，但无法填写密码")
-        if not _click_first(
-            page,
-            [
-                "button[type='submit']",
-                "button:has-text('Continue')",
-                "button:has-text('Next')",
-                "button:has-text('继续')",
-                "button:has-text('创建')",
-                "form button",
-            ],
-            timeout_ms=8000,
-        ):
-            _human_pause(0.12, 0.35)
-            page.keyboard.press("Enter")
+        ) or {}
+        if not submit_result.get("ok"):
+            raise RuntimeError(f"密码页找不到可点击的 Continue 按钮：{submit_result} state={state_info}")
+        logger.info("[BrowserUse] 已填写并点击密码页 Continue：detail=%s", {k: v for k, v in submit_result.items() if k != "button"})
         _bu_delay("form")
+        wait_end = time.time() + (8 if _fast_mode() else 14)
+        retried_submit = False
+        while time.time() < wait_end:
+            state_after = _quick_auth_state(page)
+            state_name = str(state_after.get("state") or "other")
+            if state_name in ("email_verification", "profile", "chatgpt"):
+                logger.info("[BrowserUse] 密码页提交后已进入后续状态：state=%s url=%s", state_name, state_after.get("url") or "-")
+                return password
+            if not retried_submit and state_name == "password" and time.time() > wait_end - (5 if _fast_mode() else 8):
+                retried_submit = True
+                logger.info("[BrowserUse] 密码页提交后仍未跳转，等待后重试一次 Continue/Enter：url=%s", state_after.get("url") or "-")
+                _human_pause(1.2, 2.2)
+                if not _click_first(
+                    page,
+                    [
+                        "button[data-dd-action-name='Continue']",
+                        "button[data-login-web-auth-control='true'][type='submit']",
+                        "button[type='submit']",
+                        "form button",
+                    ],
+                    timeout_ms=4000,
+                ):
+                    try:
+                        page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+            if state_name not in ("password", "login_password"):
+                return password
+            time.sleep(0.25 if _fast_mode() else 0.5)
         return password
     return None
 
@@ -1208,9 +1412,13 @@ def _click_continue(page) -> None:
         page,
         [
             "button[type='submit']",
+            "button[data-dd-action-name='Continue']",
+            "button[data-dd-action-name='continue']",
+            "button[data-login-web-auth-control='true'][type='submit']",
             "button:has-text('Continue')",
             "button:has-text('Verify')",
             "button:has-text('Submit')",
+            "button:has-text('続行')",
             "button:has-text('继续')",
             "button:has-text('验证')",
             "form button",
@@ -2406,10 +2614,8 @@ def run_browser_use_registration(
             _t_pwd = _StepTimer("检测/处理密码页")
             try:
                 if next_state == "email_verification":
-                    logger.info("[BrowserUse] 邮箱提交已进入验证码页，跳过密码页检测")
-                    openai_password = None
-                else:
-                    openai_password = _fill_password_if_present(page, email, timeout=6 if _fast_mode() else 12, context=context)
+                    logger.info("[BrowserUse] 邮箱提交已进入验证码页，尝试点击“使用密码继续”并设置密码")
+                openai_password = _fill_password_if_present(page, email, timeout=8 if _fast_mode() else 18, context=context)
                 _t_pwd.done("password_set=yes" if openai_password else "password_set=no")
             except Exception as exc:
                 _t_pwd.done(f"failed={type(exc).__name__}: {str(exc)[:160]}")

@@ -2,7 +2,7 @@
 """
 Outlook 邮箱客户端（mail.chatai.codes 双协议）
 
-账号文件格式（每行一个）：
+历史账号文件格式（仅供首次迁移/手动兼容导入，每行一个）：
     # 4 段格式（基础）
     email----password----clientId----refreshToken
     例：SorenBarrett5150@outlook.com----oc621409----9e5f94bc-...----M.C529_...
@@ -12,9 +12,9 @@ Outlook 邮箱客户端（mail.chatai.codes 双协议）
     例：ChristinLeno5020@outlook.com----3qP3kEjF----9e5f94bc-...----M.C506_...----Dy9bOAnUd@wmhotmail.com----zf4rBS
 
 工作流：
-    1. pick_account()       从根目录 `用于注册的邮箱.json` 中挑一个未用过的账号
+    1. pick_account()       直接从 SQLite 邮箱库挑一个未用过的账号
     2. fetch_latest_otp()   双协议（Graph / IMAP）轮询取 OTP
-    3. 注册成功后会写入 `注册成功的邮箱.txt` 与 `注册成功的token.txt`
+    3. 注册成功后会写入 SQLite 账号表
 
 只用 Outlook 提供的 refresh_token 调远端的 mail.chatai.codes 服务，
 不直连 Microsoft Graph，因为后者要 access_token + 复杂 OAuth 协议。
@@ -256,16 +256,12 @@ def pick_account() -> OutlookAccount:
     """
     from core.db import claim_next_outlook, outlook_pool_summary
 
-    inserted, skipped = import_outlook_from_file()
-    if inserted:
-        logger.info(f"[Outlook] 已自动从 {OUTLOOK_ACCOUNTS_FILE} 导入 {inserted} 个新账号（跳过 {skipped} 个）")
-
     row = claim_next_outlook()
     if row is None:
         summary = outlook_pool_summary()
         raise OutlookClientError(
             f"Outlook 账号池没有可用账号: {summary}. "
-            f"请把新邮箱写入 {OUTLOOK_ACCOUNTS_FILE}，程序会在下次注册前自动导入。"
+            "请在 WebUI 的邮箱库中导入新邮箱。"
         )
 
     account = OutlookAccount(

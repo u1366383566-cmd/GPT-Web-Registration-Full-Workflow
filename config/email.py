@@ -3,9 +3,9 @@
 Outlook 邮箱账号池配置。
 
 注册邮箱与 OTP 均只走 Outlook 账号池：
-    1. 把邮箱素材写入项目根目录 `用于注册的邮箱.txt`
-    2. 每行格式：email====password====clientId====refreshToken
-    3. 运行注册时会自动导入新增邮箱
+    1. 首次启动会把旧的 `用于注册的邮箱.txt` 迁移到 SQLite
+    2. 运行期间通过 WebUI「邮箱库」导入和管理邮箱
+    3. 注册时直接从 SQLite 邮箱库领取可用邮箱
 """
 from config.env_loader import env_str, apply_env_overrides
 

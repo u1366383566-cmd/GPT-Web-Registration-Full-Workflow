@@ -43,7 +43,9 @@ def run_cloak_registration(email: str, name: str, birthday: str, proxy: str = No
         next_state = _submit_email_and_wait_next(driver, email, attempts=3)
         _check_manual_stop()
 
-        openai_password = None if next_state == "otp" else _fill_password_page_if_present(driver, email, timeout=25)
+        # 如果邮箱提交后直接进入验证码页，也尝试点击“使用密码继续”进入密码创建页；
+        # _fill_password_page_if_present 会在设置成功后返回本次 OpenAI 注册密码。
+        openai_password = _fill_password_page_if_present(driver, email, timeout=25)
         _check_manual_stop()
 
         current_otp = otp_code

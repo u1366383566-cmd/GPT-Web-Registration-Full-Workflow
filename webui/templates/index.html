@@ -198,8 +198,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #totpLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #totpLogPanel:not(.hidden), #qrPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -207,9 +207,9 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
-    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #totpLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #totpLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #totpLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .hidden { display: none !important; }
@@ -743,9 +743,10 @@
     .accounts-table-v2 .col-email { width: 240px; }
     .accounts-table-v2 .col-source { width: 90px; }
     .accounts-table-v2 .col-token { width: 100px; }
+    .accounts-table-v2 .col-password { width: 120px; }
     .accounts-table-v2 .col-plan { width: 120px; }
     .accounts-table-v2 .col-note { width: 140px; }
-    .accounts-table-v2 .col-small { width: 72px; }
+    .accounts-table-v2 .col-small { width: 170px; }
     .accounts-table-v2 .col-status { width: 100px; }
     .accounts-table-v2 .col-agent { width: 140px; }
     .accounts-table-v2 .col-time { width: 170px; }
@@ -778,6 +779,7 @@
     .accounts-table-v2 tbody td:first-child { padding-left: 16px; }
     .accounts-table-v2 tbody td:last-child { padding-right: 16px; }
     .accounts-table-v2 .col-email,
+    .accounts-table-v2 .col-password,
     .accounts-table-v2 .col-plan,
     .accounts-table-v2 .col-note,
     .accounts-table-v2 .col-agent,
@@ -823,6 +825,40 @@
     }
     .accounts-table-v2 .acc-v2-token-copy:disabled {
       opacity: .55; cursor: not-allowed;
+    }
+    .accounts-table-v2 .acc-v2-twofa {
+      font-size: 13px; font-weight: 500;
+    }
+    .accounts-table-v2 .acc-v2-twofa-actions {
+      display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
+    }
+    .accounts-table-v2 .acc-v2-twofa-btn {
+      min-height: 26px; padding: 0 10px; border-radius: 13px;
+      border: 1px solid #b9dfc9; background: #f0fbf5; color: #166534;
+      font: inherit; font-size: 12px; font-weight: 800; line-height: 1;
+      cursor: pointer; white-space: nowrap;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .accounts-table-v2 .acc-v2-twofa-btn:hover:not(:disabled) {
+      background: #2bb8a6; border-color: #2bb8a6; color: #fff;
+    }
+    .accounts-table-v2 .acc-v2-twofa-btn:disabled {
+      opacity: .55; cursor: not-allowed;
+    }
+    .accounts-table-v2 .acc-v2-twofa-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 26px; padding: 0 10px; border-radius: 13px;
+      border: 1px solid #9ee0d6; background: #E7FCF8; color: #2bb8a6;
+      font: inherit; font-size: 12px; font-weight: 800; line-height: 1;
+      white-space: nowrap;
+    }
+    .accounts-table-v2 .acc-v2-twofa-code {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 26px; padding: 0 10px; border-radius: 13px;
+      border: 1px solid #bdd0ff; background: #f3f7ff; color: #1d4ed8;
+      font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+      font-size: 13px; font-weight: 900; line-height: 1; letter-spacing: .08em;
+      white-space: nowrap;
     }
     .accounts-table-v2 .acc-v2-codex {
       font-size: 13px; font-weight: 500;
@@ -2177,12 +2213,6 @@
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="给选中的 free(可Plus试用) 账号批量提链，类型按配置 PIX/UPI/KAKAO_PAY/IDEAL">提链</button>
         </div>
         <div class="acc-v2-btn-group">
-          <span class="acc-v2-btn-group-title">Agent</span>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnGenerateSelectedAgentV2" disabled title="给选中的已注册账号批量生成 Codex Agent Token">生成</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedAgentV2" disabled title="下载选中账号已生成的 Codex Agent Token，打包 ZIP">下载</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnUploadSelectedAgentSub2V2" disabled title="把选中账号已生成的 Codex Agent Token 上传到 sub2api">上传sub2</button>
-        </div>
-        <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">Codex</span>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnRetrySelectedCodexV2" disabled title="给选中的账号批量补跑 Codex 授权">补跑</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedCpaV2" disabled title="从 CPA auth-files 下载选中账号的 Codex JSON，并打包 ZIP">下载CPA</button>
@@ -2217,8 +2247,8 @@
         <table class="accounts-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
-            <col class="col-token"><col class="col-plan"><col class="col-note"><col class="col-small">
-            <col class="col-status"><col class="col-agent"><col class="col-time"><col class="col-actions">
+            <col class="col-token"><col class="col-password"><col class="col-plan"><col class="col-note"><col class="col-small">
+            <col class="col-status"><col class="col-time"><col class="col-actions">
           </colgroup>
           <thead>
             <tr>
@@ -2227,11 +2257,11 @@
               <th class="col-email">邮箱</th>
               <th class="col-source">来源</th>
               <th class="col-token">Token</th>
+              <th class="col-password">密码</th>
               <th class="col-plan">套餐</th>
               <th class="col-note">备注</th>
               <th class="col-small">2FA</th>
               <th class="col-status">Codex</th>
-              <th class="col-agent">Agent Token</th>
               <th class="col-time">创建时间</th>
               <th class="col-actions">操作</th>
             </tr>
@@ -2247,11 +2277,17 @@
       </h3>
       <div class="log" id="retryLogContent">加载中…</div>
     </div>
-    <div class="body hidden" id="liveLogPanel">
+  <div class="body hidden" id="liveLogPanel">
       <h3>查活日志：<span id="liveLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
         <button class="btn" id="btnCloseLiveLog" style="float:right;min-height:28px;">关闭</button>
       </h3>
       <div class="log" id="liveLogContent">加载中…</div>
+    </div>
+    <div class="body hidden" id="totpLogPanel">
+      <h3>2FA日志：<span id="totpLogEmail" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+        <button class="btn" id="btnCloseTotpLog" style="float:right;min-height:28px;">关闭</button>
+      </h3>
+      <div class="log" id="totpLogContent">加载中…</div>
     </div>
   </div>
 
@@ -2487,6 +2523,7 @@ let copySeq = 0;
 const copyStore = new Map();
 let ACCOUNTS = [], OUTLOOK = [], CONFIG = [];
 let ACCOUNTS_TOTAL = 0;
+const TOTP_CODE_CACHE = new Map();
 let OUTLOOK_TOTAL = 0;
 let SHOW_ARCHIVED_ACCOUNTS = false;
 let SHOW_PLUS_ACCOUNTS_ONLY = false;
@@ -3172,8 +3209,10 @@ async function pollAccountPlanStatuses() {
     const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
     const codex = getAccountsCodexFilter();
     const q = getAccountsQuery();
+    const dateFrom = document.getElementById('dateFromAccountsV2')?.value || '';
+    const dateTo = document.getElementById('dateToAccountsV2')?.value || '';
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -3227,6 +3266,28 @@ function _codexCellV2(r) {
   if (s === 'skipped') return `<span class="acc-v2-codex is-skip"${titleAttr}>已跳过</span>`;
   if (s === 'deactivated') return `<span class="acc-v2-codex is-fail" title="授权记录显示账号异常，建议通过查活确认账号状态">失败</span>`;
   return `<span class="acc-v2-muted">-</span>`;
+}
+function _totpCellV2(r) {
+  const enabled = !!r.totp_enabled;
+  const status = r.totp_setup_status || '';
+  const titleText = r.totp_setup_message || r.totp_setup_error || '';
+  const titleAttr = titleText ? ` title="${esc(titleText)}"` : '';
+  if (enabled) {
+    const cached = TOTP_CODE_CACHE.get(Number(r.id));
+    const codeHtml = cached?.code
+      ? `<span class="acc-v2-twofa-code" title="${esc(cached.at || '')}">${esc(cached.code)}</span><button type="button" class="acc-v2-twofa-btn" data-account-show-totp-code="${esc(r.id)}" title="刷新当前验证码">刷新</button><button type="button" class="acc-v2-twofa-btn" data-account-copy-shown-totp-code="${esc(r.id)}" title="复制当前显示的验证码">复制验证码</button>`
+      : `<button type="button" class="acc-v2-twofa-btn" data-account-show-totp-code="${esc(r.id)}" title="显示当前验证码">看验证码</button>`;
+    return `<div class="acc-v2-twofa-actions"><span class="acc-v2-twofa-badge"${titleAttr}>已启用</span><button type="button" class="acc-v2-twofa-btn" data-account-copy-secret="totp_secret" data-account-id="${esc(r.id)}" title="复制当前 2FA 密钥">复制密钥</button>${codeHtml}</div>`;
+  }
+  if (['queued', 'running'].includes(status)) {
+    const label = status === 'queued' ? '排队中' : '开启中';
+    return `<div class="agent-token-cell"><span class="pill status-running"${titleAttr}>${label}</span></div>`;
+  }
+  const btnTitle = titleText ? ` title="${esc(titleText)}"` : ` title="为该账号开启 2FA，并把 TOTP 密钥写回账号信息"`;
+  const btn = r.has_access_token
+    ? `<button type="button" class="acc-v2-twofa-btn" data-account-totp-setup="${esc(r.id)}"${btnTitle}>开启2FA</button>`
+    : `<span class="acc-v2-muted">无Token</span>`;
+  return `<div class="agent-token-cell">${btn}</div>`;
 }
 function _codexAgentCell(r) {
   const s = r.codex_agent_status || '';
@@ -3418,6 +3479,7 @@ function _accountsV2MoreMenu(r) {
     `<button type="button" data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button>`,
     `<button type="button" onclick="checkSelectedLive([Number('${esc(r.id)}')], this); return false;" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活刷新AT</button>`,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
+    `<button type="button" data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button>`,
     _planAction(r),
     _extractLinkAction(r),
     _codexAction(r),
@@ -3461,11 +3523,11 @@ function renderAccounts() {
       </td>
       <td class="col-source">${esc(r.email_source || '-')}</td>
       <td class="col-token">${_tokenCellV2(r)}</td>
+      <td class="col-password">${r.password ? `<span class="mono" title="${esc(r.password)}">${esc(short(r.password, 18))}</span>` : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-plan">${_planCell(r)}<div class="acc-v2-sub">${_extractLinkCell(r)}</div></td>
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
-      <td class="col-small">${r.totp_enabled ? '已启用' : '<span class="acc-v2-muted">未启用</span>'}</td>
+      <td class="col-small">${_totpCellV2(r)}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
-      <td class="col-agent">${_codexAgentCell(r)}</td>
       <td class="col-time" title="${esc(r.created_at || '-')}">${esc(r.created_at || '-')}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
@@ -3495,7 +3557,6 @@ function updateAccountSelectionUi(pageRows = null) {
   const archiveTitle = SHOW_ARCHIVED_ACCOUNTS ? '把选中的归档账号恢复到默认账号列表' : '归档选中的账号；默认账号列表将不再查询/显示这些账号';
   const v2Ids = [
     'btnCheckSelectedPlansV2', 'btnExtractSelectedLinksV2',
-    'btnGenerateSelectedAgentV2', 'btnDownloadSelectedAgentV2', 'btnUploadSelectedAgentSub2V2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedTokensV2', 'btnCopySelectedEmailsV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
@@ -3580,6 +3641,42 @@ async function pollLiveLog() {
 }
 $('#btnCloseLiveLog').addEventListener('click', closeLiveLogModal);
 
+// ---------- 2FA日志面板 ----------
+let totpLogEmail = null, totpLogTimer = null;
+
+function openTotpLog(email) {
+  totpLogEmail = email;
+  $('#totpLogEmail').textContent = email;
+  $('#totpLogPanel').classList.remove('hidden');
+  updateModalScrollLock();
+  $('#totpLogContent').textContent = '加载中…';
+  pollTotpLog();
+  clearInterval(totpLogTimer);
+  totpLogTimer = setInterval(pollTotpLog, 5000);
+}
+async function pollTotpLog() {
+  if (!totpLogEmail) return;
+  try {
+    const r = await api(`/api/accounts/totp-setup-log?email=${encodeURIComponent(totpLogEmail)}`);
+    const c = $('#totpLogContent');
+    const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 30;
+    c.textContent = r.log || '(暂无日志，等待任务写入…)';
+    if (atBottom) c.scrollTop = c.scrollHeight;
+    if (!r.running) {
+      clearInterval(totpLogTimer);
+      loadAccounts();
+    }
+  } catch(e) {}
+}
+function closeTotpLogModal() {
+  $('#totpLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+  clearInterval(totpLogTimer);
+  totpLogTimer = null;
+  totpLogEmail = null;
+}
+$('#btnCloseTotpLog').addEventListener('click', closeTotpLogModal);
+
 // 账号操作按钮（事件委托）
 async function onAccountsBodyClick(e) {
   const moreToggle = e.target.closest('[data-acc-more-toggle]');
@@ -3611,12 +3708,34 @@ async function onAccountsBodyClick(e) {
       const value = await fetchOneAccountSecret(id, field);
       if (!value) { showToast('可复制内容为空'); return; }
       copyText(value);
-      showToast(field === 'access_token' ? 'Token 已复制' : field === 'codex_agent_token' ? 'Agent Token 已复制' : '账号整行已复制');
+      showToast(
+        field === 'access_token' ? 'Token 已复制' :
+        field === 'codex_agent_token' ? 'Agent Token 已复制' :
+        field === 'totp_secret' ? '2FA 密钥已复制' :
+        field === 'totp_code' ? `验证码已复制：${value}` :
+        '账号整行已复制'
+      );
     } catch(err) {
       showToast('复制失败: ' + err.message);
     } finally {
       copySecretBtn.disabled = false;
     }
+    return;
+  }
+
+  const showTotpBtn = e.target.closest('[data-account-show-totp-code]');
+  if (showTotpBtn) {
+    await showAccountTotpCode(Number(showTotpBtn.dataset.accountShowTotpCode), showTotpBtn);
+    return;
+  }
+
+  const copyShownTotpBtn = e.target.closest('[data-account-copy-shown-totp-code]');
+  if (copyShownTotpBtn) {
+    const id = Number(copyShownTotpBtn.dataset.accountCopyShownTotpCode);
+    const cached = TOTP_CODE_CACHE.get(id);
+    if (!cached?.code) { showToast('请先点“看验证码”'); return; }
+    copyText(cached.code);
+    showToast(`验证码已复制：${cached.code}`);
     return;
   }
 
@@ -3635,6 +3754,12 @@ async function onAccountsBodyClick(e) {
   const liveLogBtn = e.target.closest('[data-account-live-log]');
   if (liveLogBtn) {
     openLiveLog(liveLogBtn.dataset.accountLiveLog);
+    return;
+  }
+
+  const totpLogBtn = e.target.closest('[data-account-totp-log]');
+  if (totpLogBtn) {
+    openTotpLog(totpLogBtn.dataset.accountTotpLog);
     return;
   }
 
@@ -3665,6 +3790,12 @@ async function onAccountsBodyClick(e) {
   const extractBtn = e.target.closest('[data-extract-link]');
   if (extractBtn) {
     await extractOneLink(Number(extractBtn.dataset.extractLink), extractBtn);
+    return;
+  }
+
+  const totpBtn = e.target.closest('[data-account-totp-setup]');
+  if (totpBtn) {
+    await setupAccountTotp(Number(totpBtn.dataset.accountTotpSetup), totpBtn);
     return;
   }
 
@@ -3872,6 +4003,48 @@ async function fetchAccountSecrets(ids, field) {
 async function fetchOneAccountSecret(id, field) {
   const r = await api(`/api/accounts/${encodeURIComponent(id)}/secret?field=${encodeURIComponent(field)}`);
   return r.value || '';
+}
+
+async function fetchAccountTotpCode(id) {
+  const r = await api(`/api/accounts/${encodeURIComponent(id)}/secret?field=totp_code`);
+  return r.value || '';
+}
+
+async function showAccountTotpCode(id, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const code = await fetchAccountTotpCode(id);
+    if (!code) { showToast('当前验证码为空'); return; }
+    TOTP_CODE_CACHE.set(Number(id), { code, at: new Date().toLocaleString() });
+    renderAccounts();
+    showToast(`验证码：${code}`);
+  } catch (err) {
+    showToast('获取验证码失败: ' + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function setupAccountTotp(id, btn) {
+  const acc = ACCOUNTS.find(a => Number(a.id) === Number(id));
+  const email = acc?.email || '';
+  if (!confirm(`确定为该账号开启 2FA？\n\n${email}\n\n完成后会把 TOTP 密钥写回账号信息。`)) return;
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api(`/api/accounts/${encodeURIComponent(id)}/totp-setup`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({}),
+    });
+    showToast(r.message || '2FA 已开始开启');
+    planStatusRevision = '';
+    await loadAccounts();
+    await pollAccountPlanStatuses();
+  } catch (err) {
+    showToast('开启 2FA 失败: ' + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 async function copySelectedAccountLines() {
@@ -4731,9 +4904,6 @@ async function copyCurrentPageLines() {
   };
   bind('btnCheckSelectedPlansV2', checkSelectedPlans);
   bind('btnExtractSelectedLinksV2', extractSelectedLinks);
-  bind('btnGenerateSelectedAgentV2', generateSelectedCodexAgents);
-  bind('btnDownloadSelectedAgentV2', downloadSelectedCodexAgents);
-  bind('btnUploadSelectedAgentSub2V2', uploadSelectedCodexAgentSub2);
   bind('btnRetrySelectedCodexV2', retrySelectedCodex);
   bind('btnDownloadSelectedCpaV2', downloadSelectedCpa);
   bind('btnStopSelectedCodexV2', stopSelectedCodex);
@@ -5272,7 +5442,7 @@ function renderCodex() {
       <td class="col-time" title="${esc(r.expired || '-')}">${esc(r.expired || '-')}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
-          <button type="button" class="primary" data-codex-download="${esc(r.filename)}" title="下载本地 codex_accounts/ 中的 JSON/回执">本地下载</button>
+          <button type="button" class="primary" data-codex-download="${esc(r.filename)}" title="从 SQLite 下载 JSON/回执">下载凭证</button>
           <button type="button" class="danger" data-codex-delete="${esc(r.filename)}" title="删除本地 Codex JSON 凭证文件">删除</button>
           <div class="acc-v2-more">
             <button type="button" class="acc-v2-more-btn" data-codex-more-toggle aria-haspopup="true">更多</button>
@@ -5497,7 +5667,7 @@ async function codexDownloadBulkCpa() {
 async function codexDeleteBulk() {
   if (CODEX_SELECTED.size === 0) return;
   const filenames = Array.from(CODEX_SELECTED);
-  if (!confirm(`确定删除选中的 ${filenames.length} 个 Codex 凭证吗？\n\n会删除本地 codex_accounts/ 下的 JSON 文件，并清理导出标记。此操作不可撤销。`)) return;
+  if (!confirm(`确定删除选中的 ${filenames.length} 个 Codex 凭证吗？\n\n会删除 SQLite 中的凭证记录。此操作不可撤销。`)) return;
   const btn = $('#btnCodexDeleteBulkV2');
   if (btn) btn.disabled = true;
   try {

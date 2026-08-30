@@ -17,7 +17,7 @@ import html as html_lib
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import quote, unquote, urlparse, urlunparse
+from urllib.parse import quote, unquote, urlparse, urlunparse, parse_qsl, urlencode
 
 import requests
 
@@ -46,6 +46,17 @@ _YANGYANG_OPENAI_SUBJECT_HINTS = (
 
 class GenericApiMailError(RuntimeError):
     """通用 API 取码邮箱错误。"""
+
+
+def _cache_busted_url(url: str, attempt: int) -> str:
+    """给取码接口加缓存破坏参数，避免 CDN/反向代理一直返回上一封验证码。"""
+    try:
+        parsed = urlparse(str(url))
+        query = parse_qsl(parsed.query, keep_blank_values=True)
+        query.append(("_otp_poll", f"{int(time.time() * 1000)}-{attempt}"))
+        return urlunparse(parsed._replace(query=urlencode(query)))
+    except Exception:
+        return url
 
 
 @dataclass
@@ -480,12 +491,8 @@ def _fetch_inline_messages_page_otp(
 
 
 def pick_account() -> GenericApiEmailAccount:
-    """领取一个可用通用 API 邮箱。"""
+    """直接从 SQLite 邮箱库领取一个可用通用 API 邮箱。"""
     from core.db import claim_next_generic_api_email, generic_api_email_pool_summary
-
-    inserted, skipped = import_from_file()
-    if inserted:
-        logger.info(f"[GenericAPI] 已自动从 {_ACCOUNTS_FILE.name} 导入 {inserted} 个邮箱（跳过 {skipped} 个）")
 
     row = claim_next_generic_api_email()
     if row is None:
@@ -562,6 +569,8 @@ def fetch_latest_otp(
     headers = {
         "Accept": "application/json,text/plain,*/*",
         "User-Agent": "Mozilla/5.0 (compatible; gpt-register/1.0)",
+        "Cache-Control": "no-cache, no-store, max-age=0",
+        "Pragma": "no-cache",
     }
     last_error = ""
     best_otp: str | None = None
@@ -573,10 +582,14 @@ def fetch_latest_otp(
     )
     is_yangyang = _parse_yangyang_code_url(account.code_url) is not None
 
+    attempt = 0
     while time.time() < deadline:
+        attempt += 1
         try:
             session = requests.Session()
-            yy_result = _fetch_yangyang_otp(session, account.code_url, headers, after_ts=after_ts) if is_yangyang else None
+            # 不修改 yangyang 的路径型 URL；其列表接口本身按邮件 ID 返回数据。
+            poll_url = account.code_url if is_yangyang else _cache_busted_url(account.code_url, attempt)
+            yy_result = _fetch_yangyang_otp(session, poll_url, headers, after_ts=after_ts) if is_yangyang else None
             if yy_result:
                 code, yy_meta = yy_result
                 now_seen = time.time()
@@ -606,7 +619,7 @@ def fetch_latest_otp(
                     resp = None
                     text = ""
                 else:
-                    resp = session.get(account.code_url, headers=headers, timeout=20, verify=False)
+                    resp = session.get(poll_url, headers=headers, timeout=20, verify=False)
                     text = resp.text or ""
             if resp is None:
                 pass

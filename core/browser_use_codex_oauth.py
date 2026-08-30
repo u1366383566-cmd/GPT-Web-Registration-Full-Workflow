@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from config import browser_use as _cfg
 from config import roxybrowser as _roxy_cfg
 from core import sms_provider
+from core import codex_oauth as _codex_proto
 from core.browser_use_client import BrowserUseClient
 from core.openai_auth import AccountUnusableError, detect_account_unusable_response_body
 from core.browser_use_registration import (
@@ -556,9 +557,13 @@ def _fill_email_for_codex(page, email: str) -> None:
 
 def _looks_email_otp_page(page) -> bool:
     url = _page_url(page).lower()
+    if "/mfa-challenge" in url:
+        return False
     if "email-verification" in url or "email_otp" in url or ("verify" in url and "email" in url):
         return True
     try:
+        if page.locator("form[action*='/mfa-challenge' i]").count() > 0:
+            return False
         return page.locator("input[autocomplete='one-time-code'], input[name='code'], input[inputmode='numeric']").count() > 0
     except Exception:
         return False
@@ -648,6 +653,153 @@ def _maybe_click_passwordless_after_email(page, email: str, timeout: int = 18) -
         logger.info("[Codex][BrowserUse] 已点击一次性验证码入口，未立即检测到 OTP 页，继续后续 OTP 轮询")
 
 
+def _account_password_for_email(email: str) -> str:
+    try:
+        return _codex_proto._account_registration_password(email)
+    except Exception:
+        return ""
+
+
+def _account_totp_code_for_email(email: str) -> str:
+    try:
+        return _codex_proto._account_totp_code(email)
+    except Exception:
+        return ""
+
+
+def _looks_mfa_challenge_page(page) -> bool:
+    url = _page_url(page).lower()
+    if "/mfa-challenge/" in url or "/mfa-challenge" in url:
+        return True
+    try:
+        return bool(page.locator('form[action*="/mfa-challenge" i] input[name="code"]').count())
+    except Exception:
+        return False
+
+
+def _fill_mfa_challenge_if_present(page, email: str, timeout: int = 15) -> bool:
+    code = _account_totp_code_for_email(email)
+    if not code:
+        return False
+    end = time.time() + timeout
+    while time.time() < end:
+        if not _looks_mfa_challenge_page(page):
+            time.sleep(0.4)
+            continue
+        try:
+            ok = _fill_first(
+                page,
+                [
+                    'form[action*="/mfa-challenge" i] input[name="code"]',
+                    'form[action*="/mfa-challenge" i] input[autocomplete="one-time-code"]',
+                    'form[action*="/mfa-challenge" i] input[maxlength="6"]',
+                ],
+                code,
+                timeout_ms=5000,
+            )
+            if not ok:
+                time.sleep(0.4)
+                continue
+            time.sleep(1.2)
+            if not _click_first(
+                page,
+                [
+                    'form[action*="/mfa-challenge" i] button[type="submit"]',
+                    'button[data-dd-action-name="Continue"]',
+                    'button:has-text("Continue")',
+                    'button:has-text("続行")',
+                    'form button',
+                ],
+                timeout_ms=5000,
+            ):
+                try:
+                    page.keyboard.press("Enter")
+                except Exception:
+                    pass
+            logger.info("[Codex][BrowserUse] 已填写并提交 MFA 验证码：%s", email)
+            wait_end = time.time() + 12
+            while time.time() < wait_end:
+                if not _looks_mfa_challenge_page(page):
+                    return True
+                time.sleep(0.4)
+            return True
+        except Exception as exc:
+            logger.debug("[Codex][BrowserUse] MFA challenge 处理失败：%s", str(exc)[:160])
+            time.sleep(0.5)
+    return False
+
+
+def _fill_login_password_if_present(page, email: str, timeout: int = 18) -> str | None:
+    """Codex OAuth 若账号有密码，优先在登录密码页输入密码。返回 next_step / email_otp / None。"""
+    password = _account_password_for_email(email)
+    if not password:
+        return None
+    end = time.time() + timeout
+    while time.time() < end:
+        if _looks_mfa_challenge_page(page):
+            _fill_mfa_challenge_if_present(page, email, timeout=15)
+            return "next_step"
+        if _looks_email_otp_page(page):
+            return "email_otp"
+        if not _looks_next_step_after_login(page):
+            try:
+                if "/log-in/password" not in _page_url(page).lower():
+                    time.sleep(0.4)
+                    continue
+            except Exception:
+                time.sleep(0.4)
+                continue
+        ok = _fill_first(
+            page,
+            [
+                "input[type='password']",
+                "input[name*='password' i]",
+                "input[autocomplete='current-password']",
+            ],
+            password,
+            timeout_ms=8000,
+        )
+        if not ok:
+            logger.info("[Codex][BrowserUse] 登录密码页未找到输入框，继续等待")
+            time.sleep(0.5)
+            continue
+        time.sleep(1.6)
+        if not _click_first(
+            page,
+            [
+                "button[type='submit']",
+                "button[data-dd-action-name='Continue']",
+                "button[data-login-web-auth-control='true'][type='submit']",
+                "button:has-text('Continue')",
+                "button:has-text('続行')",
+                "button:has-text('Submit')",
+                "form button",
+            ],
+            timeout_ms=5000,
+        ):
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+        logger.info("[Codex][BrowserUse] 已填写并提交登录密码：%s", email)
+        wait_end = time.time() + 12
+        while time.time() < wait_end:
+            if _looks_mfa_challenge_page(page):
+                _fill_mfa_challenge_if_present(page, email, timeout=15)
+                return "next_step"
+            if _looks_email_otp_page(page):
+                return "email_otp"
+            if not _looks_next_step_after_login(page):
+                try:
+                    if "/log-in/password" not in _page_url(page).lower():
+                        return "next_step"
+                except Exception:
+                    return "next_step"
+            time.sleep(0.5)
+        return "next_step"
+    return None
+
+
 def _fill_email_and_otp(page, email: str, otp_provider, auth_url: str, dead_tracker: dict | None = None) -> None:
     otp_after_ts = time.time()
     logger.info("[Codex][BrowserUse] 打开授权地址")
@@ -668,7 +820,18 @@ def _fill_email_and_otp(page, email: str, otp_provider, auth_url: str, dead_trac
         _fill_email_for_codex(page, email)
         _t_email.done()
         logger.info("[Codex][BrowserUse] 已提交邮箱：%s", email)
-        _maybe_click_passwordless_after_email(page, email, timeout=18)
+        pw_result = _fill_login_password_if_present(page, email, timeout=18)
+        if pw_result == "next_step":
+            if _looks_mfa_challenge_page(page):
+                _fill_mfa_challenge_if_present(page, email, timeout=15)
+            logger.info("[Codex][BrowserUse] 账号已用密码完成登录，直接进入后续步骤")
+            return
+        if pw_result != "email_otp":
+            if _looks_mfa_challenge_page(page):
+                _fill_mfa_challenge_if_present(page, email, timeout=15)
+                logger.info("[Codex][BrowserUse] 密码后进入 MFA 验证，已完成 2FA")
+                return
+            _maybe_click_passwordless_after_email(page, email, timeout=18)
     except Exception as exc:
         if _looks_next_step_after_login(page):
             logger.info("[Codex][BrowserUse] 未检测到邮箱输入框，但页面已进入后续授权步骤：%s", _current_state_for_log(page))
@@ -692,7 +855,18 @@ def _fill_email_and_otp(page, email: str, otp_provider, auth_url: str, dead_trac
                 return
             _fill_email_for_codex(page, email)
             logger.info("[Codex][BrowserUse] 已重新提交邮箱触发 OTP")
-            _maybe_click_passwordless_after_email(page, email, timeout=12)
+            pw_result = _fill_login_password_if_present(page, email, timeout=12)
+            if pw_result == "next_step":
+                if _looks_mfa_challenge_page(page):
+                    _fill_mfa_challenge_if_present(page, email, timeout=15)
+                logger.info("[Codex][BrowserUse] 重新提交邮箱后已用密码完成登录，进入后续步骤")
+                return
+            if pw_result != "email_otp":
+                if _looks_mfa_challenge_page(page):
+                    _fill_mfa_challenge_if_present(page, email, timeout=15)
+                    logger.info("[Codex][BrowserUse] 重新提交邮箱后进入 MFA 验证，已完成 2FA")
+                    return
+                _maybe_click_passwordless_after_email(page, email, timeout=12)
         except Exception as exc:
             logger.warning("[Codex][BrowserUse] 重新提交邮箱失败，继续按当前页面轮询：%s", str(exc)[:180])
         _bu_delay("api")
@@ -744,6 +918,9 @@ def _fill_email_and_otp(page, email: str, otp_provider, auth_url: str, dead_trac
         outcome = _wait_after_email_submit(page, timeout=30 if _fast_mode() else 45, dead_tracker=dead_tracker)
         _t_otp_submit.done(f"state={outcome}")
         logger.info("[Codex][BrowserUse] 邮箱 OTP 提交后状态：%s", outcome)
+        if _looks_mfa_challenge_page(page):
+            _fill_mfa_challenge_if_present(page, email, timeout=15)
+            return
         if str(outcome).startswith("deactivated:"):
             error_code = str(outcome).split(":", 1)[1] or "account_deactivated"
             raise AccountUnusableError(f"账号已废（{error_code}）", error_code=error_code)
