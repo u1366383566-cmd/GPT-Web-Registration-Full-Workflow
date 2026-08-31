@@ -2492,8 +2492,8 @@
         <span class="outlook-import-hint">注册来源可在配置里填多个，例如：outlook,generic_api</span>
       </label>
       <label class="outlook-import-check">
-        <input id="importAsRegisteredV2" type="checkbox" checked>
-        <span>导入后默认视为「注册成功账号」（邮箱池标记已用，并出现在账号页，可直接批量补跑 Codex）</span>
+        <input id="importAsRegisteredV2" type="checkbox">
+        <span>导入后视为「注册成功账号」（邮箱池标记已用，并出现在账号页，可直接批量补跑 Codex；导入待注册的新邮箱请勿勾选）</span>
       </label>
       <label class="outlook-import-field">
         <span>邮箱素材</span>
@@ -5265,7 +5265,7 @@ async function doImportOutlook() {
   if (submitBtn) submitBtn.disabled = true;
   try {
     const source = sourceEl ? sourceEl.value : 'outlook';
-    const as_registered = registeredEl ? !!registeredEl.checked : true;
+    const as_registered = registeredEl ? !!registeredEl.checked : false;
     const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, source, as_registered}) });
     const mode = r.as_registered ? '已注册账号' : '邮箱池素材';
     const msg = `按 ${mode} 导入：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}${r.as_registered ? '；可到“账号”页选择后批量补跑 Codex' : ''}`;

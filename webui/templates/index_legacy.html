@@ -2725,7 +2725,7 @@ $('#btnImport').addEventListener('click', async () => {
   $('#btnImport').disabled = true;
   try {
     const source = $('#importSource').value;
-    const as_registered = $('#importAsRegistered')?.checked ?? true;
+    const as_registered = $('#importAsRegistered')?.checked ?? false;
     const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, source, as_registered}) });
     const mode = r.as_registered ? '已注册账号' : '邮箱池素材';
     $('#importResult').innerHTML = `<div class="banner info">按 ${mode} 导入：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}${r.as_registered ? '；可到“账号”页选择后批量补跑 Codex' : ''}</div>`;

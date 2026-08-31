@@ -133,7 +133,7 @@ def _locale_profile_key_from_geo(geo: dict | None) -> str:
 
 def _build_locale_from_geo(geo: dict | None) -> dict:
     key = _locale_profile_key_from_geo(geo)
-    locale = dict(BROWSER_LOCALE_PROFILES.get(key, BROWSER_LOCALE_PROFILES[BROWSER_LOCALE_PROFILE]))
+    locale = dict(BROWSER_LOCALE_PROFILES.get(key, BROWSER_LOCALE_PROFILES.get(BROWSER_LOCALE_PROFILE, BROWSER_LOCALE_PROFILES["jp"])))
     if geo and AUTO_BROWSER_LOCALE_FROM_IP:
         tz = str(geo.get("timezone") or "").strip()
         if tz:
@@ -301,3 +301,15 @@ def validate_browser_profile(profile: dict) -> list[str]:
 
 # ---- .env overrides for WebUI editable fields ----
 apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})
+
+# WebUI 可能保存国家码（如 GB），而画像池内部使用小写区域键（gb）。
+BROWSER_LOCALE_PROFILE = str(BROWSER_LOCALE_PROFILE or "jp").strip().lower()
+if BROWSER_LOCALE_PROFILE not in BROWSER_LOCALE_PROFILES:
+    BROWSER_LOCALE_PROFILE = "jp"
+_LOCALE = BROWSER_LOCALE_PROFILES[BROWSER_LOCALE_PROFILE]
+NAVIGATOR_LANGUAGE = _LOCALE["navigator_language"]
+NAVIGATOR_LANGUAGES = list(_LOCALE["navigator_languages"])
+ACCEPT_LANGUAGE = _LOCALE["accept_language"]
+TIMEZONE_IANA = _LOCALE["timezone_iana"]
+TIMEZONE_OFFSET_MINUTES = int(_LOCALE["timezone_offset_minutes"])
+TIMEZONE_NAME = _LOCALE["timezone_name"]

@@ -124,6 +124,13 @@ class CloakElement:
         except Exception:
             return None
 
+    @property
+    def text(self) -> str:
+        try:
+            return str(self._eval("el => el.innerText ?? el.textContent ?? ''") or "")
+        except Exception:
+            return ""
+
 
 class _SwitchTo:
     def __init__(self, driver: "CloakSeleniumDriver"):
@@ -268,6 +275,36 @@ class CloakSeleniumDriver:
             element = None
         if element is not None:
             return CloakElement(page, handle=element)
+        # Selenium 语义允许 execute_script 返回 {input: 元素, button: 元素} 这类对象；
+        # JSON 序列化会把 DOM 元素丢成普通对象，这里把对象内的元素字段还原成 CloakElement，
+        # 否则后续 scrollIntoView/click 会拿到普通对象报 "xxx is not a function"。
+        try:
+            keys = handle.evaluate(
+                "o => (o && typeof o === 'object' && !Array.isArray(o)) ? Object.keys(o) : []"
+            )
+        except Exception:
+            keys = []
+        if keys:
+            result: dict[str, Any] = {}
+            has_element = False
+            for key in keys:
+                prop = None
+                elem = None
+                try:
+                    prop = handle.get_property(key)
+                    elem = prop.as_element() if prop is not None else None
+                except Exception:
+                    elem = None
+                if elem is not None:
+                    result[key] = CloakElement(page, handle=elem)
+                    has_element = True
+                else:
+                    try:
+                        result[key] = prop.json_value() if prop is not None else None
+                    except Exception:
+                        result[key] = None
+            if has_element:
+                return result
         try:
             return handle.json_value()
         except Exception as exc:

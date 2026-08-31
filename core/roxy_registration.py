@@ -1034,39 +1034,50 @@ def _submit_email_and_wait_next(driver, email: str, attempts: int = 3) -> str:
     raise RuntimeError(f"邮箱提交后未进入密码页/验证码页，最后状态={last_state}")
 
 
-def _type_otp(driver, code: str) -> None:
+def _type_otp(driver, code: str, *, attempts: int = 4, retry_delay: float = 1.5) -> None:
     from selenium.webdriver.common.by import By
 
-    # 单输入框
-    for selector in [
-        "input[autocomplete='one-time-code']",
-        "input[name='code']",
-        "input[inputmode='numeric']",
-        "input[type='tel']",
-    ]:
-        els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
-        if len(els) == 1:
-            _human_type_text(driver, els[0], code, clear=True)
+    last_state: dict = {}
+    # 页面过渡渲染时输入框可能短暂不可见，轮询重试而不是立刻失败。
+    for attempt in range(1, max(1, attempts) + 1):
+        # 单输入框
+        for selector in [
+            "input[autocomplete='one-time-code']",
+            "input[name='code']",
+            "input[inputmode='numeric']",
+            "input[type='tel']",
+        ]:
+            els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
+            if len(els) == 1:
+                _human_type_text(driver, els[0], code, clear=True)
+                return
+
+        # 6 个分格输入框
+        boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
+        numeric_boxes = []
+        for e in boxes:
+            attrs = " ".join(str(e.get_attribute(k) or "") for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type"))
+            if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
+                numeric_boxes.append(e)
+        if len(numeric_boxes) >= len(code):
+            for e, ch in zip(numeric_boxes, code):
+                if _browser_actions_enabled():
+                    _human_scroll_to(driver, e)
+                    time.sleep(random.uniform(0.04, 0.18))
+                e.send_keys(ch)
+                if _browser_actions_enabled():
+                    human_delay("keystroke")
             return
 
-    # 6 个分格输入框
-    boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
-    numeric_boxes = []
-    for e in boxes:
-        attrs = " ".join(str(e.get_attribute(k) or "") for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type"))
-        if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
-            numeric_boxes.append(e)
-    if len(numeric_boxes) >= len(code):
-        for e, ch in zip(numeric_boxes, code):
-            if _browser_actions_enabled():
-                _human_scroll_to(driver, e)
-                time.sleep(random.uniform(0.04, 0.18))
-            e.send_keys(ch)
-            if _browser_actions_enabled():
-                human_delay("keystroke")
-        return
+        last_state = _email_otp_page_state(driver)
+        if attempt < attempts:
+            logger.warning(
+                "[OTP] 第 %s/%s 次未找到验证码输入框，%.1fs 后重试；页面状态: %s",
+                attempt, attempts, retry_delay, str(last_state)[:220],
+            )
+            time.sleep(retry_delay)
 
-    raise RuntimeError("找不到 OTP 输入框")
+    raise RuntimeError(f"找不到 OTP 输入框: last={last_state}")
 
 
 def _email_otp_page_state(driver) -> dict:
@@ -1084,7 +1095,7 @@ def _email_otp_page_state(driver) -> dict:
           disabled: !!el.disabled || String(el.getAttribute('aria-disabled') || '').toLowerCase() === 'true',
           text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120)
         }));
-        const errors = [...document.querySelectorAll('.react-aria-FieldError,[slot="errorMessage"],[id$="-error"],[aria-invalid="true"] + *,[class*="error"]')]
+        const errors = [...document.querySelectorAll('.react-aria-FieldError,[slot="errorMessage"],[id$="-error"]')]
           .filter(visible).map(el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
         return {url: location.href, title: document.title, inputs, buttons, errors, text: (document.body?.innerText || '').slice(0, 1200)};
         """) or {}
@@ -1127,6 +1138,8 @@ def _clear_otp_inputs(driver) -> None:
 
 def _click_resend_email_otp(driver, timeout: int = 20) -> dict:
     """点击重新发送邮箱验证码。优先按 DOM 属性识别，文本仅兜底。"""
+    if not _is_email_verification_page(driver):
+        return {"ok": False, "reason": "not_email_verification_page", "url": getattr(driver, "current_url", "")}
     end = time.time() + timeout
     last = None
     while time.time() < end:
@@ -1171,7 +1184,7 @@ def _wait_after_email_otp_submit(driver, timeout: int = 30) -> str:
     last = {}
     while time.time() < end:
         time.sleep(0.5)
-        if not _is_email_verification_page(driver):
+        if not _is_email_verification_page(driver) or _has_access_token(driver):
             return 'accepted'
         last = _email_otp_page_state(driver)
         invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
@@ -1696,13 +1709,25 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
     """邮箱提交后兼容 create-account/password。返回本次设置的 OpenAI 账号密码；未遇到密码页返回 None。"""
     end = time.time() + timeout
     last = {}
+    clicked_password_switch = False
     while time.time() < end:
         if _is_email_verification_page(driver):
             result = _click_continue_with_password_if_present(driver)
             if result.get("ok"):
                 logger.info("%s 邮箱验证码页已点击“使用密码继续”：email=%s detail=%s", _log_prefix(driver), email, result)
+                clicked_password_switch = True
                 time.sleep(0.8)
                 continue
+            if clicked_password_switch and result.get("reason") == "missing_continue_with_password":
+                # 刚点击成功后按钮消失 = 页面正在跳转密码页；SPA 跳转常超 0.8s，
+                # 等页面真正离开验证码页再回到主循环处理密码，而不是放弃进入 OTP 阶段。
+                nav_end = time.time() + 10
+                while time.time() < nav_end:
+                    if not _is_email_verification_page(driver):
+                        break
+                    time.sleep(0.4)
+                if not _is_email_verification_page(driver):
+                    continue
             logger.info("%s 已在邮箱验证码页，但未找到“使用密码继续”按钮：detail=%s", _log_prefix(driver), result)
             return None
         if _has_access_token(driver):

@@ -59,10 +59,27 @@ def _cache_busted_url(url: str, attempt: int) -> str:
         return url
 
 
+def normalize_remail_pickup_url(url: str) -> str:
+    """把旧版 Remail 页面地址 /pickup 归一化为真正的 JSON 取件接口 /v1/pickup。"""
+    try:
+        parsed = urlparse(str(url))
+        host = parsed.netloc.lower()
+        if host not in ("remail.aishop6.com", "www.remail.aishop6.com"):
+            return str(url)
+        if parsed.path in ("/pickup", "/api/pickup"):
+            return urlunparse(parsed._replace(path="/v1/pickup"))
+    except Exception:
+        pass
+    return str(url)
+
+
 @dataclass
 class GenericApiEmailAccount:
     email: str
     code_url: str
+
+    def __post_init__(self):
+        self.code_url = normalize_remail_pickup_url(self.code_url)
 
 
 def _flatten_json(obj) -> str:
@@ -249,10 +266,96 @@ def _parse_generic_api_ts(value) -> float | None:
     return None
 
 
+_REMAIL_OPENAI_HINTS = ("openai", "chatgpt")
+
+
+def _extract_items_api_code(items: list, after_ts: float | None = None) -> tuple[str, dict] | None:
+    """
+    兼容 remail 这类 {"items": [...邮件...]} 的取件接口。
+
+    每封邮件形如：
+      {"id": 5012, "sender": "...", "receivedAt": "...", "subject": "...",
+       "bodyPreview": "Your code is 829104.", "verificationCode": "829104"}
+
+    规则：优先取 OpenAI/ChatGPT 发件的邮件，其次取最新一封；receivedAt 早于
+    after_ts 的旧验证码直接跳过，避免误取购买邮箱时自带的微软安全码等旧邮件。
+    """
+
+    def _msg_ts(item: dict):
+        return _parse_generic_api_ts(
+            item.get("receivedAt")
+            or item.get("received_at")
+            or item.get("time")
+            or item.get("date")
+            or item.get("createdAt")
+            or item.get("created_at")
+        )
+
+    def _item_code(item: dict) -> str | None:
+        for key in ("verificationCode", "verification_code", "code", "otp"):
+            raw = item.get(key)
+            if raw is None:
+                continue
+            m = _CODE_REGEX.search(str(raw))
+            if m:
+                return m.group(1)
+        m = _CODE_REGEX.search(
+            f"{item.get('subject') or ''} {item.get('bodyPreview') or ''} {item.get('preview') or ''}"
+        )
+        return m.group(1) if m else None
+
+    def _is_openai(item: dict) -> bool:
+        blob = " ".join(
+            str(item.get(key) or "")
+            for key in ("sender", "from", "subject", "bodyPreview", "preview")
+        ).lower()
+        return any(hint in blob for hint in _REMAIL_OPENAI_HINTS)
+
+    candidates: list[tuple[str, dict, float | None]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        code = _item_code(item)
+        if not code:
+            continue
+        msg_ts = _msg_ts(item)
+        if after_ts and msg_ts and msg_ts + 2 < after_ts:
+            logger.debug(
+                "[GenericAPI] items API 跳过旧验证码: code=%s subject=%r receivedAt=%r",
+                code,
+                str(item.get("subject") or "")[:80],
+                item.get("receivedAt") or item.get("received_at"),
+            )
+            continue
+        candidates.append((code, item, msg_ts))
+    if not candidates:
+        return None
+    # OpenAI 发件优先，其次按时间取最新一封。
+    candidates.sort(key=lambda entry: (_is_openai(entry[1]), entry[2] or 0), reverse=True)
+    code, item, msg_ts = candidates[0]
+    return code, {
+        "source": "items_api",
+        "received_at": item.get("receivedAt") or item.get("received_at"),
+        "msg_ts": msg_ts,
+        "subject": item.get("subject"),
+        "from": item.get("sender") or item.get("from"),
+    }
+
+
+def is_remail_pickup_url(code_url: str) -> bool:
+    """判断取码地址是否为 remail /v1/pickup 取件接口。"""
+    try:
+        return "/v1/pickup" in urlparse(str(code_url)).path
+    except Exception:
+        return False
+
+
 def _extract_structured_api_code(text: str, after_ts: float | None = None) -> tuple[str, dict] | None:
     """
     兼容 newzoe 这类直接返回 JSON 的取码接口：
       {"code":"784207","from":"...","subject":"Your temporary ChatGPT login code","time":"2026-08-05T01:10:17.000Z"}
+    以及 remail 这类带邮件数组的取件接口：
+      {"items": [{"verificationCode": "829104", "receivedAt": "...", ...}], "fetch": {...}}
 
     如果响应里有 time/date/received_at，会按 after_ts 过滤旧码，避免拿到上一次缓存验证码。
     """
@@ -264,6 +367,10 @@ def _extract_structured_api_code(text: str, after_ts: float | None = None) -> tu
         return None
     if not isinstance(data, dict):
         return None
+
+    items = data.get("items")
+    if isinstance(items, list) and items:
+        return _extract_items_api_code(items, after_ts=after_ts)
 
     # 常见字段优先级：code / otp / verification_code；没有再回退从拉平文本提取。
     raw_code = (
@@ -534,7 +641,10 @@ def get_account_context(email: str) -> GenericApiEmailAccount | None:
     row = get_generic_api_email_by_email(email)
     if row is None:
         return None
-    account = GenericApiEmailAccount(email=row["email"], code_url=row["code_url"])
+    account = GenericApiEmailAccount(
+        email=row["email"],
+        code_url=normalize_remail_pickup_url(row["code_url"]),
+    )
     _CONTEXT_CACHE[email] = account
     return account
 
@@ -581,6 +691,7 @@ def fetch_latest_otp(
         f"最长 {max_wait or _email_cfg.OTP_MAX_WAIT}s, settle={settle}s"
     )
     is_yangyang = _parse_yangyang_code_url(account.code_url) is not None
+    is_remail_pickup = is_remail_pickup_url(account.code_url)
 
     attempt = 0
     while time.time() < deadline:
@@ -626,7 +737,13 @@ def fetch_latest_otp(
             elif resp.status_code == 200:
                 structured = _extract_structured_api_code(text, after_ts=after_ts)
                 structured_meta = structured[1] if structured else {}
-                code = structured[0] if structured else _extract_code(text)
+                if structured:
+                    code = structured[0]
+                elif is_remail_pickup:
+                    # remail 取件响应里的邮件 id/时间戳等数字不是验证码，禁用全文兜底提取。
+                    code = None
+                else:
+                    code = _extract_code(text)
                 if code:
                     now_seen = time.time()
                     if not best_otp:

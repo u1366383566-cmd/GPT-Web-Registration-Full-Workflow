@@ -312,15 +312,28 @@ def _save_collection(collection: str, rows: list[dict]) -> None:
                 row = dict(raw)
                 rid = int(row.get("id") or pos)
                 row["id"] = rid
-                if table == "email_pool" and conn.execute("SELECT 1 FROM email_pool WHERE id=?", (rid,)).fetchone():
-                    rid = int(conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM email_pool").fetchone()[0])
-                    row["id"] = rid
-                conn.execute(
-                    f"INSERT INTO {table}(id,email,status,archived,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,?)",
-                    (rid, str(row.get("email") or ""), str(row.get("status") or ""),
-                     int(bool(row.get("archived"))), str(row.get("created_at") or row.get("imported_at") or ""),
-                     str(row.get("updated_at") or ""), json.dumps(row, ensure_ascii=False)),
-                )
+                if table == "email_pool":
+                    # email_pool 按 source 列区分货架；行内未带 source 时回落到集合默认值，
+                    # 否则每次 claim/release 重写集合都会把 source 抹成空，导致领取不到。
+                    source_value = str(row.get("source") or _EMAIL_SOURCES[collection])
+                    if not row.get("source"):
+                        row["source"] = source_value
+                    if conn.execute("SELECT 1 FROM email_pool WHERE id=?", (rid,)).fetchone():
+                        rid = int(conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM email_pool").fetchone()[0])
+                        row["id"] = rid
+                    conn.execute(
+                        f"INSERT INTO {table}(id,email,source,status,archived,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,?,?)",
+                        (rid, str(row.get("email") or ""), source_value, str(row.get("status") or ""),
+                         int(bool(row.get("archived"))), str(row.get("created_at") or row.get("imported_at") or ""),
+                         str(row.get("updated_at") or ""), json.dumps(row, ensure_ascii=False)),
+                    )
+                else:
+                    conn.execute(
+                        f"INSERT INTO {table}(id,email,status,archived,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,?)",
+                        (rid, str(row.get("email") or ""), str(row.get("status") or ""),
+                         int(bool(row.get("archived"))), str(row.get("created_at") or row.get("imported_at") or ""),
+                         str(row.get("updated_at") or ""), json.dumps(row, ensure_ascii=False)),
+                    )
 
 
 def _query_collection(collection: str, *, status: str | None = None, archived: str | bool | None = None,
