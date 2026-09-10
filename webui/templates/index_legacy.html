@@ -119,6 +119,7 @@
     .col-plan { width: 82px; }
     .col-account { width: 180px; }
     .col-time { width: 168px; }
+    .col-traffic { width: 120px; white-space: nowrap; }
     .col-expire { width: 168px; }
     .col-error { width: 320px; }
     .col-actions { width: 220px; }
@@ -214,7 +215,7 @@
       grid-template-columns: 1fr;
     }
     .accounts-topbar { display: flex; gap: 12px; align-items: center; justify-content: flex-start; min-width: 0; flex-wrap: wrap; }
-    .accounts-toolbar .search { flex: 1 1 520px; min-width: 280px; max-width: 620px; }
+    .accounts-toolbar .search { flex: 0 1 400px; min-width: 240px; max-width: 400px; }
     .account-filter-strip { display: inline-flex; align-items: center; justify-content: flex-start; gap: 8px; flex-wrap: wrap; }
     .selected-hint { font-size: 12px; font-weight: 800; padding: 0 6px; white-space: nowrap; }
     .accounts-actionbar {
@@ -240,7 +241,7 @@
     .accounts-table th, .accounts-table td { padding: 7px 8px; }
     .accounts-table .col-check { width: 34px; }
     .accounts-table .col-id { width: 52px; }
-    .accounts-table .col-email { width: 250px; }
+    .accounts-table .col-email { width: 320px; }
     .accounts-table .col-source { width: 80px; }
     .accounts-table .col-token { width: 92px; }
     .accounts-table .col-password { width: 120px; }
@@ -250,19 +251,39 @@
     .accounts-table .col-status { width: 88px; }
     .accounts-table .col-agent { width: 220px; }
     .accounts-table .col-time { width: 170px; }
-    .accounts-table .col-actions { width: 330px; }
+    .accounts-table .col-actions { width: 380px; }
     .accounts-table .main-cell { font-size: 12px; }
     .accounts-table .sub-cell { margin-top: 1px; font-size: 11px; }
+    .accounts-table .account-email-cell {
+      white-space: normal; overflow: visible; text-overflow: clip; vertical-align: middle;
+    }
+    .accounts-table .account-email-cell .main-cell,
+    .accounts-table .account-email-history,
+    .accounts-table .account-email-user,
+    .accounts-table .account-email-status {
+      white-space: normal; overflow: visible; text-overflow: clip;
+      overflow-wrap: anywhere; word-break: break-word; line-height: 1.35;
+    }
+    .accounts-table .account-email-history,
+    .accounts-table .account-email-user,
+    .accounts-table .account-email-status { margin-top: 2px; font-size: 11px; }
+    .accounts-table .account-email-history { color: var(--muted); }
+    .accounts-table .account-email-user { color: #475467; }
+    .accounts-table .account-email-status { color: #b54708; }
     .accounts-table .mono { font-size: 11px; }
     .accounts-table .pill { min-width: auto; padding: 2px 6px; font-size: 11px; }
     .accounts-table .actions { gap: 4px; }
     .accounts-table .actions button { min-height: 24px; padding: 0 7px; font-size: 11px; border-radius: 5px; transition: transform .12s ease, box-shadow .12s ease, background .12s ease; }
 
-    .account-row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+    .account-row-actions {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: start; gap: 5px; width: 100%;
+    }
     .account-action-group {
-      display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap;
+      display: flex; align-items: center; align-content: flex-start; gap: 4px; flex-wrap: wrap;
       padding: 3px; border: 1px solid #edf1f5; border-radius: 8px; background: #fbfdff;
     }
+    .account-action-group button { flex: 1 1 auto; white-space: nowrap; }
     .account-action-group.danger-zone { background: #fffafa; border-color: #f4d8d6; }
     .account-action-group button { box-shadow: 0 1px 0 rgba(15,23,42,.03); }
     .account-action-group button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(15,23,42,.08); }
@@ -277,6 +298,7 @@
       .accounts-toolbar .search { max-width: none; flex-basis: auto; }
       .account-filter-strip, .accounts-actionbar { justify-content: flex-start; }
       .toolbar-sep { display: none; }
+      .account-row-actions { grid-template-columns: 1fr; }
     }
     .banner { padding: 10px 14px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; }
     .banner.warn { background: #fff7e6; color: #92600a; border: 1px solid #f3d99b; }
@@ -288,8 +310,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #totpLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #totpLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #totpLogPanel, #emailChangeLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #totpLogPanel:not(.hidden), #emailChangeLogPanel:not(.hidden), #qrPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -297,9 +319,9 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #totpLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #totpLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
-    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #totpLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #totpLogPanel h3, #emailChangeLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #totpLogPanel h3 .btn, #emailChangeLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #totpLogPanel .log, #emailChangeLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .hidden { display: none !important; }
@@ -344,6 +366,14 @@
       background: var(--soft); font-size: 13px; font-weight: 900;
     }
     .config-subhead .hint { display:block; margin-top:3px; color:var(--muted); font-size:12px; font-weight:400; line-height:1.45; }
+    .config-subhead.remail-subhead .hint { display: inline; }
+    .config-subhead .remail-promo-notice {
+      display: inline-flex; align-items: center; width: fit-content;
+      margin: 0 0 0 10px; padding: 7px 11px;
+      color: #b42318; background: #fff1f0; border: 1px solid #fecdca;
+      border-radius: 7px; font-size: 12px; font-weight: 800; line-height: 1.4;
+      vertical-align: middle; white-space: nowrap;
+    }
     .config-subtabs {
       grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap;
       padding: 8px; border: 1px solid #edf1f5; border-radius: 8px; background: #fbfcfe;
@@ -371,6 +401,22 @@
     .config-panel label.fld .hint .mono {
       white-space: normal; overflow-wrap: anywhere; word-break: break-all;
     }
+    .config-field-wrap { min-width: 0; }
+    .config-field-wrap > label.fld { margin-bottom: 0; }
+    .config-external-link {
+      display: inline-flex; align-items: center; gap: 4px; margin-top: 7px;
+      color: var(--blue); font-size: 12px; font-weight: 700; text-decoration: none;
+    }
+    .config-external-link:hover { text-decoration: underline; }
+    .config-recommendations {
+      margin-top: 9px; padding: 10px 12px;
+      border: 1px solid #c3d4fb; border-radius: 8px; background: #f4f8ff;
+      font-size: 12px; line-height: 1.55; color: var(--muted);
+    }
+    .config-recommendations-title { color: var(--text); font-weight: 700; }
+    .config-recommendations-item { display: block; margin-top: 4px; }
+    .config-recommendations-item a { color: var(--blue); font-weight: 700; text-decoration: none; }
+    .config-recommendations-item a:hover { text-decoration: underline; }
     .config-count { opacity: .72; font-weight: 700; margin-left: 4px; }
     .roxy-workspace-box {
       grid-column: 1 / -1; border: 1px solid #c3d4fb; background: #eef4ff;
@@ -456,11 +502,11 @@
         <table class="jobs-table">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-status"><col class="col-email">
-            <col class="col-time"><col class="col-time"><col class="col-error"><col class="col-actions">
+            <col class="col-time"><col class="col-time"><col class="col-traffic"><col class="col-error"><col class="col-actions">
           </colgroup>
           <thead><tr>
             <th><input type="checkbox" id="jobsSelectAll" title="全选/取消全选当前页可删除任务"></th>
-            <th>ID</th><th>状态</th><th>邮箱</th><th>开始</th><th>完成</th><th class="wrap">错误</th><th>操作</th>
+            <th>ID</th><th>状态</th><th>邮箱</th><th>开始</th><th>完成</th><th>流量</th><th class="wrap">错误</th><th>操作</th>
           </tr></thead>
           <tbody id="jobsBody"></tbody>
         </table>
@@ -490,6 +536,12 @@
             <label class="inline-num" title="只查询/显示已开通 Plus 的账号">
               <input id="showPlusAccountsOnly" type="checkbox" style="width:auto;min-height:auto;"> 已开通Plus
             </label>
+            <label class="inline-num" title="只查询/显示当前为 free 且可试用 Plus 的账号">
+              <input id="showPlusTrialAccountsOnly" type="checkbox" style="width:auto;min-height:auto;"> 可试用Plus
+            </label>
+            <label class="inline-num" title="只查询/显示已明确不能试用 Plus 的 free 账号；资格未知的账号不包含">
+              <input id="showFreeAccountsOnly" type="checkbox" style="width:auto;min-height:auto;"> free不可试用Plus
+            </label>
             <label class="inline-num" title="按账号状态筛选账号">
               状态
               <select id="codexStatusFilter" style="width:auto;min-height:auto;">
@@ -502,8 +554,17 @@
                 <option value="deactivated">账号废号</option>
               </select>
             </label>
+            <label class="inline-num" title="按账号 2FA/TOTP 状态筛选账号">
+              2FA
+              <select id="totpStatusFilter" style="width:auto;min-height:auto;">
+                <option value="">全部</option>
+                <option value="enabled">已开启</option>
+                <option value="disabled">未开启</option>
+                <option value="pending">设置中</option>
+                <option value="failed">设置失败</option>
+              </select>
+            </label>
             <button class="btn" id="btnRefreshAccounts" title="重新加载当前筛选条件和当前页账号列表">刷新账号</button>
-            <button class="btn primary" id="btnCheckSelectedLiveTop" data-live-check-selected="1" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
           </div>
         </div>
         <div class="accounts-actionbar">
@@ -521,6 +582,8 @@
           </div>
           <div class="btn-group">
             <span class="btn-group-title">批量</span>
+            <button class="btn primary" id="btnSetupSelectedTotp" disabled title="给选中的账号批量开启 2FA，并在完成后写回 TOTP 密钥">批量开2FA</button>
+            <button class="btn primary" id="btnChangeSelectedEmails" disabled title="为选中的账号从指定来源领取新邮箱并换绑">批量换邮箱</button>
             <button class="btn good" id="btnNoteSelectedAccounts" disabled title="给选中的账号统一设置备注，留空可清空备注">备注</button>
             <button class="btn good" id="btnCopySelectedLines" disabled title="复制选中账号的完整整行，每个账号一行">复制行</button>
             <button class="btn good" id="btnCopySelectedTokens" disabled title="复制选中账号的 Token，每个账号一行">复制Token</button>
@@ -563,6 +626,12 @@
           <button class="btn" id="btnCloseTotpLog" style="float:right;min-height:28px;">关闭</button>
         </h3>
         <div class="log" id="totpLogContent">加载中…</div>
+      </div>
+      <div class="body hidden" id="emailChangeLogPanel">
+        <h3>换绑日志：<span id="emailChangeLogAccount" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+          <button class="btn" id="btnCloseEmailChangeLog" style="float:right;min-height:28px;">关闭</button>
+        </h3>
+        <div class="log" id="emailChangeLogContent">加载中…</div>
       </div>
     </section>
   </div>
@@ -621,22 +690,29 @@
   <!-- ============ 邮箱池 ============ -->
   <div id="tab-outlook" class="hidden">
     <section class="card">
-      <div class="head"><h2>导入邮箱素材</h2><p>Outlook：邮箱----密码----clientId----refreshToken；通用API：邮箱----取码地址（---- 或 ==== 分隔均可）。默认按“已注册成功账号”导入，方便直接在账号页补跑 Codex 授权。</p></div>
+      <div class="head"><h2>导入邮箱素材</h2><p>Outlook：邮箱----密码----clientId----refreshToken；通用API：邮箱----取码地址；通用IMAP 每行仅需“邮箱----IMAP密码”或“邮箱:IMAP密码”，服务器参数单独配置。</p></div>
       <div class="body">
         <div id="importResult"></div>
         <label class="fld">导入类型
           <select id="importSource">
             <option value="outlook">Outlook 邮箱池</option>
             <option value="generic_api">通用 API 取码邮箱</option>
+            <option value="imap">通用 IMAP 取码邮箱</option>
           </select>
-          <span class="hint">注册来源可在配置里填多个，例如：outlook,generic_api</span>
+          <span class="hint">注册来源可在配置里填多个，例如：outlook,generic_api,imap</span>
         </label>
+        <div id="imapImportSettings" class="hidden" style="grid-template-columns:2fr 1fr 1fr;gap:10px;margin:8px 0;">
+          <label class="fld">IMAP 服务器<input id="imapServer" placeholder="imap.example.com"></label>
+          <label class="fld">端口<input id="imapPort" type="number" min="1" max="65535" value="993"></label>
+          <label class="fld">SSL<select id="imapSsl"><option value="true" selected>启用</option><option value="false">不启用</option></select></label>
+        </div>
         <label style="display:flex;gap:8px;align-items:center;margin:8px 0;color:var(--text);font-size:13px;">
           <input id="importAsRegistered" type="checkbox" style="width:auto;min-height:auto;">
-          导入后默认视为“注册成功账号”（邮箱池标记已用，并出现在账号页，可直接批量补跑 Codex）
+          导入后视为“注册成功账号”（邮箱池标记已用，并出现在账号页；导入待注册的新邮箱请勿勾选）
         </label>
         <textarea id="importText" placeholder="Outlook: email----password----clientId----refreshToken
-通用API: email----取码地址"></textarea>
+通用API: email----取码地址
+通用IMAP: email----imapPassword 或 email:imapPassword"></textarea>
         <div style="margin-top:10px;"><button class="btn primary" id="btnImport">导入</button></div>
       </div>
     </section>
@@ -648,6 +724,7 @@
               <option value="all">全部邮箱池</option>
               <option value="outlook">Outlook 邮箱池</option>
               <option value="generic_api">通用 API 邮箱池</option>
+              <option value="imap">通用 IMAP 邮箱池</option>
               <option value="cloudflare_domain">域名邮箱池</option>
             </select>
             <input id="qOutlook" placeholder="搜索邮箱、状态…">
@@ -708,6 +785,8 @@ const TOTP_CODE_CACHE = new Map();
 let OUTLOOK_TOTAL = 0;
 let SHOW_ARCHIVED_ACCOUNTS = false;
 let SHOW_PLUS_ACCOUNTS_ONLY = false;
+let SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = false;
+let SHOW_FREE_ACCOUNTS_ONLY = false;
 const ACCOUNT_SELECTED = new Set();
 const OUTLOOK_SELECTED = new Set();
 let JOBS = [];
@@ -770,6 +849,19 @@ function isPlaceholderEmpty(v) {
   return !s || ['-', '—', '无', '空', 'none', 'null', 'n/a', 'na'].includes(s.toLowerCase());
 }
 function short(v, n=40) { const s = v || ''; return s.length > n ? s.slice(0,n)+'…' : s; }
+function formatTraffic(t) {
+  if (!t || !t.available) return '-';
+  const n = (v) => Number.isFinite(Number(v)) ? Math.max(0, Number(v)) : 0;
+  const fmt = (v) => {
+    v = n(v);
+    if (v < 1024) return `${Math.round(v)} B`;
+    if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KiB`;
+    return `${(v / 1024 / 1024).toFixed(2)} MiB`;
+  };
+  const j = t.js_coverage;
+  const jsHint = j && j.enabled ? `，JS脚本 ${n(j.script_count)}（执行 ${n(j.executed_script_count)}，候选 ${n(j.candidate_script_count)}）` : '';
+  return `<span title="上传 ${fmt(t.upload_bytes)}，下载 ${fmt(t.download_bytes)}，${n(t.request_count)} 个请求${jsHint}">${fmt(t.total_bytes)}</span>`;
+}
 function copyId(v) { if (!v) return ''; const id = 'c'+(++copySeq); copyStore.set(id, v); return id; }
 function cbtn(label, value, cls='') { const id = copyId(value); return `<button class="${cls}" data-copy-id="${id}" ${id?'':'disabled'}>${label}</button>`; }
 function pill(status) {
@@ -881,6 +973,7 @@ function renderJobs() {
       <td title="${esc(j.email || '-')}">${esc(j.email || '-')}</td>
       <td class="muted" title="${esc(j.started_at || '-')}">${esc(j.started_at || '-')}</td>
       <td class="muted" title="${esc(j.completed_at || '-')}">${esc(j.completed_at || '-')}</td>
+      <td>${formatTraffic(j.network_traffic)}</td>
       <td class="muted wrap" title="${esc(j.error_message || '')}">${esc(short(j.error_message || '', 90))}</td>
       <td class="actions-cell">
         <div class="actions job-actions">
@@ -894,7 +987,7 @@ function renderJobs() {
           <button class="danger" data-delete-job="${esc(j.id)}" ${['running','stopping'].includes(j.status) ? 'disabled title="运行中的任务不能删除；如需删除请先停止"' : ''}>删除</button>
         </div>
       </td>
-    </tr>`).join('') || '<tr><td colspan="8" class="muted">暂无任务</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="9" class="muted">暂无任务</td></tr>';
   updateJobsSelectionUi(rows);
   _renderPager('jobs', total);
 }
@@ -942,7 +1035,7 @@ async function refreshJobs() {
 
 let modalScrollY = 0;
 function updateModalScrollLock() {
-  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#liveLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden');
+  const opened = !$('#logPanel').classList.contains('hidden') || !$('#retryLogPanel').classList.contains('hidden') || !$('#liveLogPanel').classList.contains('hidden') || !$('#totpLogPanel').classList.contains('hidden') || !$('#emailChangeLogPanel').classList.contains('hidden') || !$('#qrPanel').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -1196,16 +1289,27 @@ function getAccountsCodexFilter() {
   const el = $('#codexStatusFilter');
   return (el ? el.value : '').trim();
 }
+function getAccountsTotpFilter() {
+  const el = $('#totpStatusFilter');
+  return (el ? el.value : '').trim();
+}
+function getAccountsPlanFilter() {
+  if (SHOW_PLUS_ACCOUNTS_ONLY) return 'plus';
+  if (SHOW_PLUS_TRIAL_ACCOUNTS_ONLY) return 'plus_trial';
+  if (SHOW_FREE_ACCOUNTS_ONLY) return 'free_no_trial';
+  return '';
+}
 async function loadAccounts() {
   if (accountsLoading) return;
   accountsLoading = true;
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
-    const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const plan = getAccountsPlanFilter();
     const codex = getAccountsCodexFilter();
+    const totp = getAccountsTotpFilter();
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -1219,11 +1323,12 @@ async function pollAccountPlanStatuses() {
   planStatusLoading = true;
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
-    const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const plan = getAccountsPlanFilter();
     const codex = getAccountsCodexFilter();
+    const totp = getAccountsTotpFilter();
     const q = $('#qAccounts') ? $('#qAccounts').value.trim() : '';
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -1472,7 +1577,7 @@ function renderAccounts() {
     <tr>
       <td><input type="checkbox" class="account-row-check" data-account-id="${esc(r.id)}" ${ACCOUNT_SELECTED.has(Number(r.id)) ? 'checked' : ''}></td>
       <td class="muted">#${esc(r.id)}</td>
-      <td><div class="main-cell">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div><div class="sub-cell">${esc(r.user_name || '-')}</div></td>
+      <td class="account-email-cell" title="${esc(r.email || '-')}${r.original_email ? `\n原邮箱: ${esc(r.original_email)}` : ''}\n${esc(r.user_name || '-')}"><div class="main-cell">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div>${r.original_email ? `<div class="account-email-history">原邮箱: ${esc(r.original_email)}</div>` : ''}<div class="account-email-user">${esc(r.user_name || '-')}</div>${['queued','running'].includes(r.email_change_status) ? '<div class="account-email-status">换绑中</div>' : (r.email_change_status === 'failed' ? '<div class="account-email-status">换绑失败</div>' : '')}</td>
       <td>${esc(r.email_source || '-')}</td>
       <td><span class="mono" title="列表仅显示预览，完整 Token 请点复制">${r.has_access_token ? '有Token' : '<span class="muted">无Token</span>'}</span>${_liveStatusSub(r)}</td>
       <td>${r.password ? `<span class="mono" title="${esc(r.password)}">${esc(short(r.password, 18))}</span>` : '<span class="muted">-</span>'}</td>
@@ -1484,7 +1589,7 @@ function renderAccounts() {
       <td class="actions actions-cell">
         <div class="account-row-actions">
           <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制Token</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button></div>
-          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> <button data-account-live-check="${esc(r.id)}" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活</button> <button data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button> <button data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
+          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> <button data-account-change-email="${esc(r.id)}">换绑邮箱</button> <button data-account-change-email-log="${esc(r.id)}">换绑日志</button> <button data-account-live-check="${esc(r.id)}" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活</button> <button data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button> <button data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
           <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
           <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
         </div>
@@ -1507,6 +1612,8 @@ function updateAccountSelectionUi(pageRows = null) {
   const downloadTxtBtn = $('#btnDownloadSelectedTxt');
   const noteSelectedBtn = $('#btnNoteSelectedAccounts');
   const archiveSelectedBtn = $('#btnArchiveSelectedAccounts');
+  const setupTotpBtn = $('#btnSetupSelectedTotp');
+  const changeEmailsBtn = $('#btnChangeSelectedEmails');
   if (hint) hint.textContent = `已选 ${ACCOUNT_SELECTED.size}`;
   if (bulkBtn) bulkBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (retryBulkBtn) retryBulkBtn.disabled = ACCOUNT_SELECTED.size === 0;
@@ -1518,6 +1625,8 @@ function updateAccountSelectionUi(pageRows = null) {
   if (copySelectedTokensBtn) copySelectedTokensBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (downloadTxtBtn) downloadTxtBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (noteSelectedBtn) noteSelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
+  if (setupTotpBtn) setupTotpBtn.disabled = ACCOUNT_SELECTED.size === 0;
+  if (changeEmailsBtn) changeEmailsBtn.disabled = ACCOUNT_SELECTED.size === 0;
   if (archiveSelectedBtn) {
     archiveSelectedBtn.disabled = ACCOUNT_SELECTED.size === 0;
     archiveSelectedBtn.textContent = SHOW_ARCHIVED_ACCOUNTS ? '恢复选中' : '归档选中';
@@ -1630,6 +1739,38 @@ function closeTotpLogModal() {
 }
 $('#btnCloseTotpLog').addEventListener('click', closeTotpLogModal);
 
+let emailChangeLogAccountId = null, emailChangeLogTimer = null;
+function openEmailChangeLog(accountId) {
+  emailChangeLogAccountId = Number(accountId);
+  $('#emailChangeLogAccount').textContent = `账号 #${emailChangeLogAccountId}`;
+  $('#emailChangeLogPanel').classList.remove('hidden');
+  $('#emailChangeLogContent').textContent = '加载中…';
+  updateModalScrollLock();
+  pollEmailChangeLog();
+  clearInterval(emailChangeLogTimer);
+  emailChangeLogTimer = setInterval(pollEmailChangeLog, 3000);
+}
+async function pollEmailChangeLog() {
+  if (!emailChangeLogAccountId) return;
+  try {
+    const r = await api(`/api/accounts/${encodeURIComponent(emailChangeLogAccountId)}/change-email-log`);
+    const content = $('#emailChangeLogContent');
+    const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 30;
+    content.textContent = r.log || '(暂无换绑日志)';
+    $('#emailChangeLogAccount').textContent = `账号 #${emailChangeLogAccountId}${r.email ? ' · ' + r.email : ''}`;
+    if (atBottom) content.scrollTop = content.scrollHeight;
+    if (!r.running) clearInterval(emailChangeLogTimer);
+  } catch(e) {}
+}
+function closeEmailChangeLog() {
+  $('#emailChangeLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+  clearInterval(emailChangeLogTimer);
+  emailChangeLogTimer = null;
+  emailChangeLogAccountId = null;
+}
+$('#btnCloseEmailChangeLog').addEventListener('click', closeEmailChangeLog);
+
 // 老 UI 查活兜底：捕获阶段直接拦截，避免被表格/按钮组其它事件吞掉。
 document.addEventListener('click', async (e) => {
   const bulkBtn = e.target.closest('[data-live-check-selected]');
@@ -1728,6 +1869,18 @@ $('#accountsBody').addEventListener('click', async (e) => {
   const noteBtn = e.target.closest('[data-account-note]');
   if (noteBtn) {
     await editAccountNote(Number(noteBtn.dataset.accountNote), noteBtn);
+    return;
+  }
+
+  const changeEmailBtn = e.target.closest('[data-account-change-email]');
+  if (changeEmailBtn) {
+    await changeAccountEmails([Number(changeEmailBtn.dataset.accountChangeEmail)]);
+    return;
+  }
+
+  const changeEmailLogBtn = e.target.closest('[data-account-change-email-log]');
+  if (changeEmailLogBtn) {
+    openEmailChangeLog(Number(changeEmailLogBtn.dataset.accountChangeEmailLog));
     return;
   }
 
@@ -1852,6 +2005,8 @@ $('#btnCopySelectedLines').addEventListener('click', copySelectedAccountLines);
 $('#btnCopySelectedTokens').addEventListener('click', copySelectedAccountTokens);
 $('#btnDownloadSelectedTxt').addEventListener('click', downloadSelectedAccountTxt);
 $('#btnNoteSelectedAccounts').addEventListener('click', noteSelectedAccounts);
+$('#btnSetupSelectedTotp').addEventListener('click', setupSelectedTotp);
+$('#btnChangeSelectedEmails').addEventListener('click', () => changeAccountEmails(Array.from(ACCOUNT_SELECTED)));
 $('#btnExtractSelectedLinks').addEventListener('click', extractSelectedLinks);
 $('#btnRetrySelectedCodex').addEventListener('click', retrySelectedCodex);
 $('#btnDownloadSelectedCpa').addEventListener('click', downloadSelectedCpa);
@@ -1866,6 +2021,38 @@ $('#showArchivedAccounts').addEventListener('change', async (e) => {
 });
 $('#showPlusAccountsOnly').addEventListener('change', async (e) => {
   SHOW_PLUS_ACCOUNTS_ONLY = !!e.target.checked;
+  if (SHOW_PLUS_ACCOUNTS_ONLY) {
+    SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = false;
+    SHOW_FREE_ACCOUNTS_ONLY = false;
+    $('#showPlusTrialAccountsOnly').checked = false;
+    $('#showFreeAccountsOnly').checked = false;
+  }
+  ACCOUNT_SELECTED.clear();
+  PAGERS.accounts.page = 1;
+  await loadAccounts();
+  await pollAccountPlanStatuses();
+});
+$('#showPlusTrialAccountsOnly').addEventListener('change', async (e) => {
+  SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = !!e.target.checked;
+  if (SHOW_PLUS_TRIAL_ACCOUNTS_ONLY) {
+    SHOW_PLUS_ACCOUNTS_ONLY = false;
+    SHOW_FREE_ACCOUNTS_ONLY = false;
+    $('#showPlusAccountsOnly').checked = false;
+    $('#showFreeAccountsOnly').checked = false;
+  }
+  ACCOUNT_SELECTED.clear();
+  PAGERS.accounts.page = 1;
+  await loadAccounts();
+  await pollAccountPlanStatuses();
+});
+$('#showFreeAccountsOnly').addEventListener('change', async (e) => {
+  SHOW_FREE_ACCOUNTS_ONLY = !!e.target.checked;
+  if (SHOW_FREE_ACCOUNTS_ONLY) {
+    SHOW_PLUS_ACCOUNTS_ONLY = false;
+    SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = false;
+    $('#showPlusAccountsOnly').checked = false;
+    $('#showPlusTrialAccountsOnly').checked = false;
+  }
   ACCOUNT_SELECTED.clear();
   PAGERS.accounts.page = 1;
   await loadAccounts();
@@ -1944,6 +2131,58 @@ async function setupAccountTotp(id, btn) {
     showToast('开启 2FA 失败: ' + err.message);
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+async function changeAccountEmails(ids) {
+  ids = (ids || []).map(Number).filter(Boolean);
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  const source = prompt('请输入新邮箱来源：\noutlook / generic_api / imap / cloudflare_domain / cloudflare / gptmail / mailnest / cloudmail / remail', 'outlook');
+  if (!source) return;
+  try {
+    const url = ids.length === 1 ? `/api/accounts/${ids[0]}/change-email` : '/api/accounts/change-email-bulk';
+    const body = ids.length === 1 ? {source:source.trim()} : {source:source.trim(), account_ids:ids};
+    const r = await api(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    ACCOUNT_SELECTED.clear();
+    showToast(ids.length === 1 ? '邮箱换绑任务已开始' : `已开始 ${r.started_count || 0} 个，跳过 ${(r.skipped || []).length} 个`);
+    loadAccounts();
+    const poll = setInterval(loadAccounts, 5000); setTimeout(() => clearInterval(poll), 10 * 60 * 1000);
+  } catch(e) { showToast('邮箱换绑失败: ' + e.message); }
+}
+
+async function setupSelectedTotp() {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  if (!confirm(`确定为选中的 ${ids.length} 个账号批量开启 2FA？\n\n任务会在后台排队执行，完成后自动把 TOTP 密钥写回账号信息。\n已经开启、没有 Token 或正在设置中的账号会自动跳过。`)) return;
+
+  const btn = $('#btnSetupSelectedTotp');
+  if (!btn) return;
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '入队中…';
+  try {
+    const r = await api('/api/accounts/totp-setup-bulk', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({account_ids: ids}),
+    });
+    (r.started || []).forEach(item => ACCOUNT_SELECTED.delete(Number(item.id)));
+    const skippedCount = Number(r.skipped_count ?? (r.skipped || []).length) || 0;
+    const busyCount = Number(r.busy_count ?? (r.busy || []).length) || 0;
+    const failedCount = Number(r.failed_count ?? (r.failed || []).length) || 0;
+    const details = [];
+    if (skippedCount) details.push(`跳过 ${skippedCount} 个`);
+    if (busyCount) details.push(`进行中 ${busyCount} 个`);
+    if (failedCount) details.push(`失败 ${failedCount} 个`);
+    showToast(`已入队 ${r.started_count || 0} 个${details.length ? '，' + details.join('，') : ''}`);
+    planStatusRevision = '';
+    await loadAccounts();
+    await pollAccountPlanStatuses();
+  } catch (err) {
+    showToast('批量开启 2FA 失败: ' + err.message);
+  } finally {
+    btn.textContent = oldText;
+    updateAccountSelectionUi();
   }
 }
 
@@ -2306,7 +2545,7 @@ async function checkSelectedLive(idsArg = null, btnArg = null) {
 并发线程数：${workers}`;
   if (!confirm(msg)) return;
   const firstAcc = ACCOUNTS.find(a => Number(a.id) === Number(ids[0]));
-  const btn = btnArg || $('#btnCheckSelectedLive') || $('#btnCheckSelectedLiveTop');
+  const btn = btnArg || $('#btnCheckSelectedLive');
   const old = btn ? btn.textContent : '';
   if (btn) {
     btn.disabled = true;
@@ -2534,6 +2773,7 @@ async function retrySelectedCodex() {
 
 $('#qAccounts').addEventListener('input', debounce(() => { ACCOUNT_SELECTED.clear(); PAGERS.accounts.page = 1; loadAccounts(); }, 250));
 $('#codexStatusFilter').addEventListener('change', () => { ACCOUNT_SELECTED.clear(); PAGERS.accounts.page = 1; loadAccounts(); });
+$('#totpStatusFilter').addEventListener('change', () => { ACCOUNT_SELECTED.clear(); PAGERS.accounts.page = 1; loadAccounts(); });
 $('#copyAllTokens').addEventListener('click', async () => {
   const ids = ACCOUNTS.filter(r => r.has_access_token).map(r => Number(r.id));
   if (!ids.length) { showToast('当前页没有 Token'); return; }
@@ -2546,9 +2786,9 @@ $('#copyAllLines').addEventListener('click', async () => {
 });
 
 // ---------- 邮箱池 ----------
-function poolKey(r) { return `${r.source || $('#poolSource')?.value || 'outlook'}|${r.email || ''}`; }
+function poolKey(r) { return `${r.source || $('#poolSource')?.value || 'all'}|${r.email || ''}`; }
 function poolLabel(src) {
-  return ({outlook:'Outlook', generic_api:'通用API', cloudflare_domain:'域名邮箱'})[src] || src || '-';
+  return ({outlook:'Outlook', generic_api:'通用API', imap:'通用IMAP', cloudflare_domain:'域名邮箱'})[src] || src || '-';
 }
 async function loadOutlook() {
   try {
@@ -2568,7 +2808,7 @@ function renderOutlook() {
   const rows = OUTLOOK;
   $('#outlookBody').innerHTML = rows.map(r => `
     <tr>
-      <td><input type="checkbox" class="outlook-row-check" data-email="${esc(r.email)}" data-source="${esc(r.source || 'outlook')}" ${OUTLOOK_SELECTED.has(poolKey(r)) ? 'checked' : ''}></td>
+      <td><input type="checkbox" class="outlook-row-check" data-email="${esc(r.email)}" data-source="${esc(r.source || $('#poolSource')?.value || 'all')}" ${OUTLOOK_SELECTED.has(poolKey(r)) ? 'checked' : ''}></td>
       <td><div class="main-cell">${esc(r.email)}</div><div class="sub-cell mono">${esc(short(r.copy_line, 70))}</div></td>
       <td>${esc(poolLabel(r.source))}</td>
       <td>${pill(r.status)}</td>
@@ -2578,15 +2818,15 @@ function renderOutlook() {
       <td class="actions">
         ${cbtn('复制邮箱', r.copy_line)} ${cbtn('复制Token', r.access_token, 'primary')} ${cbtn('复制整行', r.account_copy_line, 'good')}
         ${r.status !== 'available'
-          ? `<button data-pool-act="available" data-email="${esc(r.email)}" data-source="${esc(r.source || 'outlook')}">恢复可用</button>`
+          ? `<button data-pool-act="available" data-email="${esc(r.email)}" data-source="${esc(r.source || $('#poolSource')?.value || 'all')}">恢复可用</button>`
           : ''}
         ${r.status !== 'disabled'
-          ? `<button data-pool-act="disabled" data-email="${esc(r.email)}" data-source="${esc(r.source || 'outlook')}">停用</button>`
+          ? `<button data-pool-act="disabled" data-email="${esc(r.email)}" data-source="${esc(r.source || $('#poolSource')?.value || 'all')}">停用</button>`
           : ''}
         ${r.status !== 'failed'
-          ? `<button data-pool-act="failed" data-email="${esc(r.email)}" data-source="${esc(r.source || 'outlook')}">标失败</button>`
+          ? `<button data-pool-act="failed" data-email="${esc(r.email)}" data-source="${esc(r.source || $('#poolSource')?.value || 'all')}">标失败</button>`
           : ''}
-        <button data-pool-act="delete" data-email="${esc(r.email)}" data-source="${esc(r.source || 'outlook')}" style="border-color:#e7a3a0;color:#b3261e;">删除</button>
+        <button data-pool-act="delete" data-email="${esc(r.email)}" data-source="${esc(r.source || $('#poolSource')?.value || 'all')}" style="border-color:#e7a3a0;color:#b3261e;">删除</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="8" class="muted">邮箱池为空</td></tr>';
   updateOutlookSelectionUi(rows);
@@ -2616,13 +2856,25 @@ function updateOutlookSelectionUi(pageRows = null) {
   cbAll.disabled = pageKeys.length === 0;
 }
 $('#qOutlook').addEventListener('input', debounce(() => { PAGERS.outlook.page = 1; loadOutlook(); }, 250));
+function syncLegacyImapImportSettings() {
+  const isImap = $('#importSource').value === 'imap';
+  const settings = $('#imapImportSettings');
+  if (settings) { settings.classList.toggle('hidden', !isImap); settings.style.display = isImap ? 'grid' : 'none'; }
+  $('#importText').placeholder = isImap
+    ? 'user@example.com----imapPassword\nuser2@example.com:imapPassword'
+    : ($('#importSource').value === 'generic_api' ? 'email----取码地址' : 'email----password----clientId----refreshToken');
+}
 $('#poolSource').addEventListener('change', () => {
   PAGERS.outlook.page = 1;
   OUTLOOK_SELECTED.clear();
-  if ($('#poolSource').value !== 'all' && $('#poolSource').value !== 'cloudflare_domain') $('#importSource').value = $('#poolSource').value;
+  if ($('#poolSource').value !== 'all' && $('#poolSource').value !== 'cloudflare_domain') {
+    $('#importSource').value = $('#poolSource').value;
+    syncLegacyImapImportSettings();
+  }
   loadOutlook();
 });
 $('#importSource').addEventListener('change', () => {
+  syncLegacyImapImportSettings();
   $('#poolSource').value = $('#importSource').value;
   PAGERS.outlook.page = 1;
   OUTLOOK_SELECTED.clear();
@@ -2647,7 +2899,11 @@ $('#outlookBody').addEventListener('click', async (e) => {
   try {
     if (poolAct === 'delete') {
       if (!confirm(`确定从邮箱池删除 ${email}？此操作不可撤销。`)) return;
-      await api('/api/outlook/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, source}) });
+      const r = await api('/api/outlook/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, source}) });
+      if (!r.deleted) {
+        showToast('删除失败：邮箱不存在或来源不匹配');
+        return;
+      }
       OUTLOOK_SELECTED.delete(`${source}|${email}`);
       showToast('已删除');
     } else {
@@ -2726,7 +2982,14 @@ $('#btnImport').addEventListener('click', async () => {
   try {
     const source = $('#importSource').value;
     const as_registered = $('#importAsRegistered')?.checked ?? false;
-    const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, source, as_registered}) });
+    const payload = {text, source, as_registered};
+    if (source === 'imap') {
+      payload.imap_server = ($('#imapServer')?.value || '').trim();
+      payload.imap_port = Number($('#imapPort')?.value || 993);
+      payload.imap_ssl = ($('#imapSsl')?.value || 'true') === 'true';
+      if (!payload.imap_server) { showToast('请填写 IMAP 服务器'); return; }
+    }
+    const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
     const mode = r.as_registered ? '已注册账号' : '邮箱池素材';
     $('#importResult').innerHTML = `<div class="banner info">按 ${mode} 导入：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}${r.as_registered ? '；可到“账号”页选择后批量补跑 Codex' : ''}</div>`;
     $('#importText').value = '';
@@ -3014,11 +3277,39 @@ function renderConfigField(f) {
     const ph = f.secret ? '保存在 .env，可留空' : '可留空';
     html += `<input type="${inputType}" data-key="${attrEsc(f.key)}" value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
   }
-  return html + `</label>`;
+  const field = html + `</label>`;
+  const decorated = f.external_url
+    ? `<div class="config-field-wrap">${field}${renderConfigExternalLink(f)}</div>`
+    : field;
+  return decorated + renderConfigRecommendedLinks(f);
+}
+
+function renderConfigExternalLink(f) {
+  const url = String(f.external_url || '').trim();
+  if (!/^https?:\/\//i.test(url)) return '';
+  const label = String(f.external_label || '打开官网');
+  return `<a class="config-external-link" href="${attrEsc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+}
+function renderConfigRecommendedLinks(f) {
+  const links = Array.isArray(f.recommended_links) ? f.recommended_links : [];
+  const items = links.map(item => {
+    const url = String(item?.url || '').trim();
+    if (!/^https?:\/\//i.test(url)) return '';
+    const label = String(item?.label || url);
+    const description = String(item?.description || '').trim();
+    return `<span class="config-recommendations-item"><a href="${attrEsc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>${description ? `：${esc(description)}` : ''}</span>`;
+  }).filter(Boolean).join('');
+  if (!items) return '';
+  return `<div class="config-recommendations" role="note"><span class="config-recommendations-title">推荐家宽</span>${items}</div>`;
 }
 
 function configSubhead(title, help = '') {
-  return `<div class="config-subhead">${esc(title)}${help ? `<span class="hint">${esc(help)}</span>` : ''}</div>`;
+  const subheadClass = title === 'Remail' ? 'config-subhead remail-subhead' : 'config-subhead';
+  const titleHtml = title === 'Remail' ? `<div class="remail-subhead-title">${esc(title)}</div>` : esc(title);
+  const promo = title === 'Remail'
+    ? `<span class="remail-promo-notice" role="note">通过作者卡网购买积分9折优惠</span>`
+    : '';
+  return `<div class="${subheadClass}">${titleHtml}${help ? `<span class="hint">${esc(help)}</span>` : ''}${promo}</div>`;
 }
 
 function emailConfigSectionForKey(key) {
@@ -3028,7 +3319,9 @@ function emailConfigSectionForKey(key) {
   if (key.startsWith('GPTMAIL_')) return ['GPTMail', 'GPTMail 临时邮箱 API 配置'];
   if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢临时邮箱 API 配置'];
   if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
+  if (key.startsWith('REMAIL_')) return ['Remail', 'Remail 开放 API、项目下单和取件配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
+  if (key.startsWith('IMAP_')) return ['通用 IMAP', '通用 IMAP 邮箱池的收件目录配置'];
   if (['EMAIL_DOMAIN','QQ_EMAIL','QQ_IMAP_PASSWORD'].includes(key)) return ['Cloudflare 域名邮箱', 'Cloudflare 转发到 QQ 邮箱后的 IMAP 收信配置'];
   return ['其他邮箱配置', ''];
 }
@@ -3098,7 +3391,7 @@ function renderConfigFields(fields) {
       CONFIG_EMAIL_ACTIVE_SECTION,
       v => { CONFIG_EMAIL_ACTIVE_SECTION = v; },
       emailConfigSectionForKey,
-      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Outlook 邮箱池', 'Cloudflare 域名邮箱', '其他邮箱配置'],
+      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Remail', 'Outlook 邮箱池', 'Cloudflare 域名邮箱', '其他邮箱配置'],
       'email-config-section'
     );
   }

@@ -57,7 +57,10 @@ def _append_log(email: str, line: str, *, clear: bool = False) -> None:
         f.write(f"{stamp} [INFO] {line}\n")
 
 
-def _run_twofa(*, account_id: int, email: str, access_token: str, proxy: str | None, trigger: str) -> dict:
+def _run_twofa(
+    *, account_id: int, email: str, access_token: str, proxy: str | None,
+    trigger: str,
+) -> dict:
     fh: logging.FileHandler | None = None
     root_logger = logging.getLogger()
     thread_name = threading.current_thread().name
@@ -76,7 +79,8 @@ def _run_twofa(*, account_id: int, email: str, access_token: str, proxy: str | N
         root_logger.addHandler(fh)
         logger.info("[2FA] 开始后台设置：email=%s trigger=%s", email, trigger)
         real_proxy = _normalize_proxy(proxy)
-        session = BrowserSession(proxy=real_proxy, fingerprint_seed=f"account:{email.lower()}")
+        identity = email.strip().lower()
+        session = BrowserSession(proxy=real_proxy, fingerprint_seed=f"account:{identity}")
         _append_log(email, f"[2FA] 会话创建完成：proxy={session.proxy or 'direct'} device_id={session.device_id}")
         _append_log(email, f"[2FA] 指纹摘要：{session.fingerprint_summary_text()}")
         secret = setup_2fa(session, email, access_token=access_token)

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import core.account_liveness as liveness
 import core.live_check_service as live_service
@@ -68,6 +68,7 @@ class AccountLivenessTests(unittest.TestCase):
 
     def test_preflight_preserves_explicit_direct_route_and_skips_providers(self):
         with patch.object(liveness, "BrowserSession", _DummyBrowserSession), \
+             patch.object(liveness, "_warm_login_fingerprint_context"), \
              patch.object(liveness, "get_csrf_token", return_value="csrf"), \
              patch.object(liveness, "signin_openai", return_value="https://auth.example/authorize"):
             session, authorize_url = liveness._network_preflight_with_retry(
@@ -81,6 +82,7 @@ class AccountLivenessTests(unittest.TestCase):
     def test_preflight_retries_with_new_session_when_csrf_is_blocked(self):
         csrf_errors = [RuntimeError("HTTP Error 403"), "csrf"]
         with patch.object(liveness, "BrowserSession", _DummyBrowserSession), \
+             patch.object(liveness, "_warm_login_fingerprint_context"), \
              patch.object(liveness, "get_csrf_token", side_effect=csrf_errors), \
              patch.object(liveness, "signin_openai", return_value="authorize"), \
              patch.object(liveness.time, "sleep"):
@@ -94,6 +96,39 @@ class AccountLivenessTests(unittest.TestCase):
         # None means each attempt may reselect a proxy from the configured pool.
         self.assertIsNone(_DummyBrowserSession.created[0].received_proxy)
         self.assertIsNone(_DummyBrowserSession.created[1].received_proxy)
+
+    def test_fingerprint_profile_is_pinned_when_route_changes(self):
+        state = {}
+        first = MagicMock()
+        first.browser_profile = {
+            "navigator_language": "ja-JP",
+            "timezone_iana": "Asia/Tokyo",
+            "screen_width": 1512,
+        }
+        second = MagicMock()
+        second.browser_profile = dict(first.browser_profile)
+        with patch.object(liveness, "BrowserSession", side_effect=[first, second]) as factory:
+            self.assertIs(
+                liveness._new_fingerprint_pinned_session(
+                    "user@example.com", "socks5://proxy:1080", state,
+                ),
+                first,
+            )
+            self.assertIs(
+                liveness._new_fingerprint_pinned_session(
+                    "user@example.com", "", state,
+                ),
+                second,
+            )
+
+        first_kwargs = factory.call_args_list[0].kwargs
+        second_kwargs = factory.call_args_list[1].kwargs
+        self.assertTrue(first_kwargs["detect_exit_geo"])
+        self.assertIsNone(first_kwargs["browser_profile"])
+        self.assertFalse(second_kwargs["detect_exit_geo"])
+        self.assertEqual(second_kwargs["browser_profile"]["navigator_language"], "ja-JP")
+        self.assertEqual(second_kwargs["browser_profile"]["timezone_iana"], "Asia/Tokyo")
+        self.assertEqual(first_kwargs["fingerprint_seed"], second_kwargs["fingerprint_seed"])
 
     def test_reauth_otp_dead_account_error_is_not_retried(self):
         response = SimpleNamespace(
@@ -138,6 +173,7 @@ class AccountLivenessTests(unittest.TestCase):
         success = {"ok": True, "status": "live", "access_token": "new-token"}
         with patch.object(live_service, "_QUEUE_SLOTS", slot), \
              patch.object(live_service.db, "mark_account_live_check_running", return_value=True), \
+             patch.object(live_service.db, "get_account", return_value={"email_source": "remail"}), \
              patch.object(live_service.db, "update_account_liveness"), \
              patch.object(live_service, "_append_log"), \
              patch.object(live_service, "resolve_plan_check_route", return_value={
@@ -155,7 +191,13 @@ class AccountLivenessTests(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(check.call_args_list[0].kwargs["proxy"], "socks5://proxy.example:1080")
+        self.assertEqual(check.call_args_list[0].kwargs["email_source"], "remail")
         self.assertEqual(check.call_args_list[1].kwargs["proxy"], "")
+        self.assertEqual(check.call_args_list[1].kwargs["email_source"], "remail")
+        self.assertIs(
+            check.call_args_list[0].kwargs["fingerprint_state"],
+            check.call_args_list[1].kwargs["fingerprint_state"],
+        )
         self.assertTrue(slot.released)
 
 

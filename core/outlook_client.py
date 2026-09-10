@@ -75,6 +75,11 @@ class OutlookClientError(RuntimeError):
     """Outlook 邮箱服务相关异常。"""
 
 
+def _cache_key(email: str) -> str:
+    """生成邮箱上下文缓存 key，统一按去空格/小写处理。"""
+    return str(email or "").strip().lower()
+
+
 def _http_session() -> CurlSession:
     s = CurlSession(impersonate=IMPERSONATE)
     s.headers.update({
@@ -270,26 +275,66 @@ def pick_account() -> OutlookAccount:
         client_id=row["client_id"],
         refresh_token=row["refresh_token"],
     )
-    _CONTEXT_CACHE[account.email] = account
+    _CONTEXT_CACHE[_cache_key(account.email)] = account
     logger.info(f"[Outlook] 选中账号: {account.email}（DB id={row['id']}）")
     return account
 
 
 def get_account_context(email: str) -> OutlookAccount | None:
-    """根据邮箱查 OutlookAccount 上下文。优先内存缓存，fallback 查 DB。"""
-    if email in _CONTEXT_CACHE:
-        return _CONTEXT_CACHE[email]
-    from core.db import get_outlook_by_email
-    row = get_outlook_by_email(email)
+    """根据邮箱查 OutlookAccount 上下文。
+
+    优先读取邮箱池记录；已注册账号如果邮箱池记录被清理/迁移，则从账号
+    自身保存的 Outlook 素材凭证恢复。这样查活、Codex Auth 重启后仍能使用
+    注册时的 Outlook 来源取 OTP。
+    """
+    cache_key = _cache_key(email)
+    if not cache_key:
+        return None
+    if cache_key in _CONTEXT_CACHE:
+        return _CONTEXT_CACHE[cache_key]
+    from core.db import get_account_by_email, get_outlook_by_email
+
+    pool_row = get_outlook_by_email(email)
+    # 已注册账号的来源是权威值。即使本地 Outlook 池里残留了同名记录，
+    # 也不能让一个实际来自 Remail/其它来源的账号误走 Outlook 取码。
+    registered = get_account_by_email(email)
+    registered_source = str((registered or {}).get("email_source") or "").strip().lower()
+    registered_source = registered_source.replace(";", ",").replace("|", ",").split(",", 1)[0].strip()
+    if registered_source and registered_source != "outlook":
+        return None
+
+    # 正常情况下优先使用邮箱池记录；邮箱池被清理、迁移，或记录不完整时，
+    # 用已注册账号保存的同一份 Outlook 素材补齐。注册成功时 insert_account
+    # 会把 password/client_id/refresh_token 持久化在账号记录里。
+    row = pool_row or registered
     if row is None:
         return None
+
+    def _first_value(*keys: str) -> str:
+        for source_row in (row, registered if row is not registered else None):
+            if not source_row:
+                continue
+            for key in keys:
+                value = str(source_row.get(key) or "").strip()
+                if value:
+                    return value
+        return ""
+
+    email_value = _first_value("email") or str(email or "").strip()
+    password = _first_value("password")
+    client_id = _first_value("client_id", "clientId")
+    refresh_token = _first_value("refresh_token", "refreshToken")
+    if not (email_value and password and client_id and refresh_token):
+        return None
     account = OutlookAccount(
-        email=row["email"],
-        password=row["password"],
-        client_id=row["client_id"],
-        refresh_token=row["refresh_token"],
+        email=email_value,
+        password=password,
+        client_id=client_id,
+        refresh_token=refresh_token,
+        recovery_email=_first_value("recovery_email"),
+        recovery_code=_first_value("recovery_code"),
     )
-    _CONTEXT_CACHE[email] = account
+    _CONTEXT_CACHE[cache_key] = account
     return account
 
 
@@ -297,7 +342,7 @@ def release_account(email: str, status: str = "available", note: str | None = No
     """按注册阶段结果更新 Outlook 账号状态：可重试回 available，已消耗则标记 failed。"""
     from core.db import release_outlook
     release_outlook(email, status=status, note=note)
-    _CONTEXT_CACHE.pop(email, None)
+    _CONTEXT_CACHE.pop(_cache_key(email), None)
 
 
 def import_outlook_from_file(path: str | Path | None = None) -> tuple[int, int]:
@@ -915,7 +960,7 @@ def fetch_otp_with_account(
     直接给定 OutlookAccount（含 client_id / refresh_token）拉 OTP。
     适用于 account 不在 DB / 不在内存缓存的场景（如外部脚本调用）。
     """
-    _CONTEXT_CACHE[account.email] = account
+    _CONTEXT_CACHE[_cache_key(account.email)] = account
     return fetch_latest_otp(
         account.email,
         after_ts=after_ts,

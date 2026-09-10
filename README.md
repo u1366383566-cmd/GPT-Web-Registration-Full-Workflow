@@ -12,7 +12,7 @@ ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目�
 
 > 项目说明：本项目基于 [xiaoguzuiniu/gpt-free-register](https://github.com/xiaoguzuiniu/gpt-free-register) 进行改造与扩展。
 
-- TG 交流群：[https://t.me/+gu_cvEKq_vcyZWRl](https://t.me/+gu_cvEKq_vcyZWRl)
+- TG 交流群：[https://t.me/+uC3Ix0l2E085Njhl](https://t.me/+uC3Ix0l2E085Njhl)
 
 > 开源版说明：仓库只保留源码、配置模板和文档；运行时账号、Token、邮箱池、Codex 凭证、日志等真实数据均已通过 `.gitignore` 排除。
 
@@ -48,12 +48,14 @@ ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目�
 - Cloudflare 域名邮箱 + QQ 邮箱 IMAP 收信（`cloudflare_domain`）
 - Cloudflare Worker 临时邮箱：自动创建 + JWT 取码（`cloudflare`，兼容 cloudflare_temp_email）
 - 通用 API 邮箱：`email----取码地址`
+- 通用 IMAP 邮箱池：每行 `邮箱----IMAP密码` 或 `邮箱:IMAP密码`，服务器、端口和 SSL 在导入界面统一配置
 - GPTMail 临时邮箱 API：运行时随机生成邮箱并自动收取验证码
-- Mail.cx 临时邮箱 API：运行时随机生成地址并通过服务端长轮询收取验证码
+- Mail.cx 临时邮箱 API：运行时随机生成地址并通过服务端长轮询收取验证码（`mailcx`）
+- Remail 开放 API：按项目下单短效邮箱并自动收取验证码（`remail`）
 - `EMAIL_SOURCE` 支持多个来源组合，例如：
 
 ```python
-EMAIL_SOURCE = "outlook,generic_api"
+EMAIL_SOURCE = "outlook,generic_api,imap"
 ```
 
 - MailNest-迈巢：Outlook 临时邮箱
@@ -80,7 +82,9 @@ EMAIL_SOURCE = "outlook,generic_api"
 - 实时查看任务日志。
 - 动态调整注册线程数，提交后新任务立即使用最新值。
 - 批量补跑 Codex，补跑线程数每次提交即时生效。
-- 管理账号、邮箱池、Codex 凭证；账号页支持复制全部/选中整行，邮箱池列表展示导入时间、已用时间和状态。
+- 管理账号、邮箱池、Codex 凭证；账号页支持单个/批量换绑邮箱并指定新邮箱来源，换绑后同时展示原邮箱与当前邮箱，支持查看换绑日志，并自动查活刷新 AT。
+- 邮箱池导入默认不创建账号；勾选“导入后默认视为注册成功账号”后，会将邮箱池标记为已用并同步显示在账号页，可直接批量补跑 Codex。
+- Roxy/Cloak 浏览器注册完成后统计整个浏览器会话的上传、下载和总流量，任务列表与账号扩展信息均会保存结果；Browser Use/Skyvern 云端浏览器不启用本地流量监听、资源拦截或 JS 覆盖率采集。
 - 配置页支持热加载，保存后无需重启。
 - Roxy 团队/项目可在配置页获取并保存。
 
@@ -90,6 +94,75 @@ EMAIL_SOURCE = "outlook,generic_api"
 - 数据库启用 WAL、超时等待和常用字段索引，WebUI 的账号、套餐状态、邮箱库、Codex 和任务分页直接执行 SQLite `COUNT(*) + LIMIT/OFFSET`，不再先读取全量数据后由 Python 切片。
 - 首次启动会自动把现有 JSON/历史 SQLite 数据迁移到新数据库；迁移完成后不再读写账号、任务、邮箱池和 Codex 凭证 JSON/TXT 文件。
 - `turb.sqlite3*` 属于运行时数据，已加入 `.gitignore`，请纳入备份策略。
+
+### 浏览器网络流量统计
+
+浏览器驱动会从打开注册页开始统计，到注册后停留结束、浏览器关闭前完成汇总。结果包含：
+
+- 上传字节、下载字节、总字节数；
+- HTTP 请求数、失败/未完成请求数；
+- WebSocket 帧 payload 字节（如流程使用 WebSocket）。
+
+现代/Legacy WebUI 的注册任务列表会显示总流量，完整结构保存在任务记录的 `network_traffic` 和成功账号的 `extra_json` 中。统计为浏览器侧可观测的请求/响应流量，不包含 TLS/IP/代理隧道额外开销，也不包含邮箱 API、Roxy API 或 CDP 控制通道流量。
+
+#### 省流量模式
+
+在 WebUI「浏览器画像」中开启「本地浏览器省流量模式」，或在 `.env` 设置（仅 Roxy/Cloak 生效）：
+
+```dotenv
+BROWSER_DATA_SAVER_MODE=True
+BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES=["image", "media"]
+# URL glob 列表；WebUI 中则是一行一条
+BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS='["**://auth.openai.com/awe/api/v2/rum**", "**://chatgpt.com/ces/statsc/flush**", "**://connect.facebook.net/**", "**://analytics.tiktok.com/**", "**://snap.licdn.com/**", "**://bat.bing.com/**", "**://accounts.google.com/gsi/client**"]'
+```
+
+Roxy/Selenium 会在启动参数中关闭图片加载，并使用 Chrome CDP 拦截常见图片、媒体等 URL 后缀及配置的 URL glob（因此也能覆盖无扩展名资源）；Cloak 使用 Playwright 按资源类型和 URL glob 拦截。Browser Use/Skyvern 是云端浏览器，不安装本地省流量拦截器，始终保留完整页面资源。默认只拦截 `image`、`media`，以及配置中列出的 RUM/广告统计 URL，不会按类型拦截登录所需的核心脚本、接口和 WebSocket。Playwright 会放行带验证码/challenge 关键词的 URL；Roxy 的 Chromium 图片开关和 CDP URL 黑名单无法提供 URL 例外规则，若页面出现验证码或布局异常，关闭该模式后重试。
+
+Job 208 的明细显示，当前规则实际拦截了 5 个第三方脚本（Google GSI、Facebook、TikTok、LinkedIn、Bing）以及 380 次 RUM 请求；邮箱/密码注册成功。注册侧下载约 9.92 MiB，其中脚本约 8.90 MiB，主要来自 ChatGPT 核心 CDN chunk。
+
+当前默认规则只包含 RUM/广告统计和 Google GSI。邮箱/密码注册不使用 Google 登录，因此可以保留 GSI 规则；如果将来启用 Google 登录，需从「省流量 URL 屏蔽规则」中移除以下行：
+
+```text
+**://accounts.google.com/gsi/client**
+```
+
+疑似 CES 遥测的 `**://chatgpt.com/ces/v1/rgstr` 约 277 KiB/轮，也可在单独验证注册成功率后加入。
+
+不要屏蔽 `chatgpt.com/cdn/assets/*.js`、`auth-cdn.oaistatic.com/assets/*.js`、`sentinel.openai.com`、`chatgpt.com/backend-api/sentinel/*`、`ab.chatgpt.com/v1/initialize`、`chatgpt.com/realtime/wm` 和注册/OTP/session API。Job 207 屏蔽 `7aaae702-*.js` 后出现 OTP 输入框缺失；Job 208 放行该 chunk 后完整成功，因此不能仅凭低函数执行比例屏蔽 CDN chunk。URL 规则填写 `[]` 可恢复为仅按资源类型拦截，空白则使用内置默认规则。
+
+如需拦截 CSS，可加入 `stylesheet`：
+
+```dotenv
+BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES=["image", "media", "stylesheet"]
+```
+
+CSS 通常不是注册接口必需，但会影响隐藏元素、布局和可见性判断，建议先单独测试；出现元素找不到或点击异常时移除 `stylesheet`。
+
+#### 资源明细日志
+
+需要分析注册流程中哪些资源占流量时，开启：
+
+```dotenv
+BROWSER_TRAFFIC_DETAIL_LOG=True
+BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES=2000
+```
+
+启用统计的 Roxy/Cloak 注册任务结束后，日志会输出 `[资源明细]` 行，包含资源 URL、类型、HTTP 方法、状态码、上传大小、下载大小、响应 body/header 大小，以及 `failed`、`blocked`、`unfinished`、`cache` 状态；明细按单请求总字节从大到小排列。Browser Use/Skyvern 云端浏览器不启用该监听。`ws_upload/ws_download` 表示 WebSocket 帧 payload。Playwright 缓存状态在无法从 API 确认时显示 `unknown`，Selenium/CDP 能识别时显示 `hit` 或 `miss`。URL 查询参数值、data/blob URL 内容不会写入日志。
+
+把一轮注册的 `[资源明细]` 日志发回后，可以按域名、路径、资源类型和实际字节量判断下一步是否适合继续拦截；`stylesheet`、`font` 等类型需要结合注册是否受影响再启用。
+
+#### JS 执行函数覆盖率
+
+需要确认某个 CDN chunk 是否在 Roxy/Cloak 注册流程中真正执行时，开启：
+
+```dotenv
+BROWSER_JS_COVERAGE_LOG=True
+BROWSER_JS_COVERAGE_MAX_ENTRIES=1000
+```
+
+Roxy/Selenium 会在当前 Chrome target 上启用 CDP `Profiler.startPreciseCoverage`，Cloak 会为已发现的 Chromium Page 建立 CDP session；Browser Use/Skyvern 不启用 JS 覆盖率监听。任务结束时日志包含：`[JS执行汇总]`、每个脚本的 `[JS脚本]`、实际执行函数的 `[JS执行]`（函数名、调用次数、`startOffset-endOffset:count`）以及“本次未观察到执行范围”的 `[JS候选]`。`network_traffic.js_coverage` 会保存脚本级摘要和候选 URL，逐函数 offset 只写日志，不保存源码、参数或返回值。
+
+`[JS候选]` 仅表示该轮覆盖率没有观察到执行代码，不能单独证明可以屏蔽：先用一轮未屏蔽核心脚本的成功注册作为基线，再一次只屏蔽一个候选并对比 OTP、session、资料页和成功率。脚本若来自 `data:`/`blob:`/扩展页不会列为 URL 屏蔽候选；跨 popup/多 target 的 Selenium 页面只覆盖当前 CDP target。若 CDP Profiler 不受当前指纹浏览器支持，日志会标记 `supported=False`，不会影响注册流程。
 
 ---
 
@@ -129,6 +202,7 @@ cp .env.example .env
 - `ROXY_API_TOKEN`
 - `QQ_IMAP_PASSWORD`
 - `CLOUDFLARE_API_KEY` / `CLOUDFLARE_CUSTOM_AUTH`（`EMAIL_SOURCE=cloudflare` 时）
+- `REMAIL_API_KEY`（`EMAIL_SOURCE=remail` 时）
 - `CPA_MANAGEMENT_KEY`
 - `SMS_API_KEY`
 - `L_ADMIN_AUTH_CODE`
@@ -196,6 +270,27 @@ EMAIL_SOURCE = "generic_api"
 EMAIL_SOURCE = "outlook,generic_api,mailnest"
 ```
 
+#### 通用 IMAP 邮箱
+
+在 WebUI「邮箱池 → 导入」选择“通用 IMAP 取码邮箱”，每行格式：
+
+```text
+email----imap_password
+email:imap_password
+```
+
+- 在导入类型选择“通用 IMAP 取码邮箱”后，填写统一的 IMAP 服务器、端口和 SSL 配置。
+- IMAP 登录用户名固定使用对应邮箱地址，无需额外配置。
+- 端口通常为 `993`，SSL 默认启用。
+- 示例：`user@example.com----app-password`
+- 默认读取 `INBOX`，可在「配置 → 邮箱 / OTP → 通用 IMAP」修改。
+
+将邮箱来源设置为：
+
+```python
+EMAIL_SOURCE = "imap"
+```
+
 #### GPTMail 临时邮箱
 
 在 WebUI 的「配置 → 邮箱 / OTP」填写 `GPTMail API Key`，然后将邮箱来源设置为：
@@ -211,16 +306,6 @@ GPTMAIL_API_KEY=你的_GPTMail_API_Key
 ```
 
 服务地址固定为 `https://mail.chatgpt.org.uk`。未填写 Key 时，任务会提示填写 `GPTMail API Key`，不会使用公共测试 Key。
-
-#### Mail.cx 临时邮箱
-
-在 WebUI 的「配置 → 邮箱 / OTP → Mail.cx」填写 Dashboard → Tokens 创建的 API Token，并将邮箱来源设置为：
-
-```python
-EMAIL_SOURCE = "mailcx"
-```
-
-Mail.cx 邮箱无需预先创建；项目会从 `/config` 读取系统默认域名，随机生成地址，并用 `/inbox/{address}` 的服务端长轮询等待 OpenAI 验证码。若已在 Mail.cx 验证自有域名，可在「Mail.cx 邮箱域名」填写该域名。Mail.cx 对单个 Token 限制一个并发长轮询，因此使用该来源时建议注册并发设为 `1`。
 
 #### Cloudflare Worker 临时邮箱（`cloudflare`）
 
@@ -258,6 +343,34 @@ Cloudflare Email Routing 需要把域名邮件转发到 QQ 邮箱。此模式不
 
 - `api-key`获取页面：https://mailnest.top/account
 - 项目代码获取页面：https://mailnest.top/buy-email。默认为`chatgpt001`，可以直接使用
+
+#### Remail 开放 API
+
+Remail API 文档：[https://remail.aishop6.com/docs](https://remail.aishop6.com/docs)。该服务使用 API Key
+按项目创建短效接码订单，订单返回的邮箱和 service token 会自动用于后续取码。
+
+在 WebUI「配置 → 邮箱 / OTP」填写：
+
+- `REMAIL_API_KEY`：Remail 控制台生成的 `rk-` 开头 API Key；
+- `REMAIL_PROJECT_ID`：Remail「项目」列表中用于 ChatGPT/OpenAI 验证码的 `projectId`；
+- `REMAIL_EMAIL_SUFFIX`：下单后缀，微软邮箱通常填 `outlook.com`。
+
+然后设置：
+
+```dotenv
+USE_EMAIL_SERVICE=True
+EMAIL_SOURCE=remail
+REMAIL_API_BASE=https://remail.aishop6.com
+REMAIL_API_KEY=你的_Remail_API_Key
+REMAIL_PROJECT_ID=项目ID
+REMAIL_EMAIL_SUFFIX=outlook.com
+REMAIL_SERVICE_MODE=purchase
+REMAIL_SUPPLY_POLICY=public_only
+```
+
+`REMAIL_SERVICE_MODE` 默认为 `purchase`（长效购买，可重复收件），也可改为 `code`（短效接码）。
+`REMAIL_SUPPLY_POLICY` 默认为 `public_only`，也可改为 `private_first`。每个注册任务会创建一个
+对应模式的订单，验证码通过 `/v1/pickup` 获取；Remail 订单余额和对应项目库存需可用。
 
 ---
 
@@ -744,6 +857,8 @@ ENABLE_CODEX_AUTO = False
 │   ├── register.py                 # 默认注册信息
 │   └── ...
 ├── core/
+│   ├── browser_data_saver.py       # Roxy/Cloak 本地浏览器省流量资源拦截
+│   ├── browser_traffic.py          # 浏览器注册 HTTP/WebSocket 流量统计
 │   ├── roxy_registration.py        # Roxy / 浏览器注册页面流程
 │   ├── cloakbrowser_registration.py # Cloak 注册入口
 │   ├── cloakbrowser_driver.py      # Cloak Playwright→Selenium 风格适配层

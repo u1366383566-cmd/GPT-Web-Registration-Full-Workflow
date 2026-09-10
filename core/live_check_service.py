@@ -47,6 +47,16 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             return {"ok": False, "status": "failed", "error": "账号已删除或查活状态已被重置"}
         route = resolve_plan_check_route(explicit_proxy=proxy)
         selected_proxy = route.get("proxy")
+        # 查活必须沿用账号注册时记录的邮箱来源。不能只调用
+        # resolve_email_source(email)：Remail 等临时邮箱的上下文只在领取进程
+        # 内存中存在，服务重启后按当前 EMAIL_SOURCE 推断会把来源判错。
+        try:
+            account = db.get_account(account_id) or {}
+        except Exception:
+            account = {}
+        email_source = str(account.get("email_source") or "").strip() or None
+        if email_source:
+            _append_log(email, f"[查活] 使用注册时保存的邮箱来源：{email_source}")
         _append_log(
             email,
             "[查活] 开始后台执行 "
@@ -54,7 +64,16 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             f"proxy_mode={route.get('proxy_mode')} proxy_used={route.get('proxy_used') or '-'} "
             f"fallback_reason={route.get('proxy_fallback_reason') or '-'}"
         )
-        result = check_account_liveness(email, proxy=selected_proxy, clear_log=False)
+        # 代理重试及直连兜底共享同一份完整 browser_profile。网络出口可以切换，
+        # 但 UA、语言、时区、屏幕、CPU/内存及 Sentinel 画像不能在同一任务中突变。
+        fingerprint_state: dict = {}
+        result = check_account_liveness(
+            email,
+            proxy=selected_proxy,
+            clear_log=False,
+            email_source=email_source,
+            fingerprint_state=fingerprint_state,
+        )
         # 认证链早期 403 通常是该出口被 CF 拦截，不代表账号死亡。
         # auto/proxy 模式下如果用了代理，额外直连兜底一次，便于和套餐查询的 auto 语义保持接近。
         err_text = str(result.get("error") or "")
@@ -67,7 +86,13 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
         ):
             _append_log(email, "[查活] 代理出口收到 403，尝试直连兜底一次")
             # BrowserSession 约定：None=从代理池抽取，""=明确直连。
-            result = check_account_liveness(email, proxy="", clear_log=False)
+            result = check_account_liveness(
+                email,
+                proxy="",
+                clear_log=False,
+                email_source=email_source,
+                fingerprint_state=fingerprint_state,
+            )
         db.update_account_liveness(account_id, result)
         if result.get("ok"):
             _append_log(email, "[查活] 完成：账号正常，已刷新最新 AT/accessToken")

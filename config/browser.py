@@ -20,20 +20,21 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 
-def _latest_chrome_major(default: str = "149") -> str:
-    """兼容旧模块导入；默认按 2026-07-19 抓包里的 Chrome 149 画像。"""
+def _latest_chrome_major(default: str = "146") -> str:
+    """兼容旧模块导入；必须与 curl_cffi 实际 TLS impersonate 版本一致。"""
     return default
 
 
-CHROME_MAJOR = "149"
-CHROME_FULL_VERSION = "149.0.0.0"
+CHROME_MAJOR = "146"
+CHROME_FULL_VERSION = "146.0.0.0"
 
 SAFARI_VERSION = ""
 SAFARI_WEBKIT_VERSION = "537.36"
 MAC_OS_UA_VERSION = "10_15_7"
 
 # ---------- curl_cffi 模拟浏览器 ----------
-# curl_cffi 0.15 当前最高内置到 chrome146；HTTP/JS 画像按抓包补齐到 Chrome/149。
+# curl_cffi 0.15 当前最高内置到 chrome146。UA、Client Hints、JS navigator
+# 必须同步为 146；不能出现 TLS=146、HTTP/JS=149 的跨版本拼接指纹。
 IMPERSONATE = "chrome146"
 
 # ---------- 桌面 Chrome 画像 ----------
@@ -49,8 +50,8 @@ USER_AGENT = (
     f"Chrome/{CHROME_FULL_VERSION} Safari/{SAFARI_WEBKIT_VERSION}"
 )
 
-SEC_CH_UA = '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"'
-SEC_CH_UA_FULL_VERSION_LIST = '"Google Chrome";v="149.0.0.0", "Chromium";v="149.0.0.0", "Not)A;Brand";v="24.0.0.0"'
+SEC_CH_UA = '"Google Chrome";v="146", "Chromium";v="146", "Not)A;Brand";v="24"'
+SEC_CH_UA_FULL_VERSION_LIST = '"Google Chrome";v="146.0.0.0", "Chromium";v="146.0.0.0", "Not)A;Brand";v="24.0.0.0"'
 SEC_CH_UA_PLATFORM = '"macOS"'
 SEC_CH_UA_PLATFORM_VERSION = '"15.7.0"'
 SEC_CH_UA_MOBILE = "?0"
@@ -79,6 +80,46 @@ CLOUD_PROXY_ORG_KEYWORDS = [
     "tencent", "alibaba", "aliyun", "huawei cloud", "vultr", "contabo",
     "data center", "datacenter", "hosting", "host", "server", "cloud",
 ]
+
+# ---------- Roxy/Cloak 浏览器省流量模式 ----------
+# 默认关闭。开启后只拦截可选的图片/媒体，以及下面明确列出的统计/第三方 URL；
+# 不拦截登录所需的 document、核心 script、stylesheet、xhr/fetch、websocket；
+# Playwright 会放行带验证码/challenge 关键词的 URL。
+# 该模式仅应用于 Roxy/Cloak，本地浏览器才需要节省带宽；Browser Use/Skyvern 云端
+# 浏览器不会安装省流量拦截器。Selenium/CDP 只能按 URL 后缀拦截，若验证码异常可关闭。
+BROWSER_DATA_SAVER_MODE: bool = False
+# 每行一个 Playwright resource_type。可选 image/media/font/manifest/texttrack 等；
+# 默认只拦截 image、media；也可配置 stylesheet/font 等资源；Roxy 还会通过 Chromium 启动参数关闭图片加载，
+# 遇到页面布局或验证码异常时可关闭模式。
+BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES: list[str] = ["image", "media"]
+# URL glob 级别的额外拦截。以下是资源明细中确认不参与邮箱密码注册主流程的
+# RUM/广告统计资源；Google GSI 仅用于 Google 登录，不使用 Google 登录时默认拦截。
+# 不要把 ChatGPT/auth.openai 的 CDN chunk 当作候选：即使某个 chunk 只有少量函数
+# 被调用，也可能负责路由、表单切换或懒加载；需经过单变量 A/B 验证后才能加入规则。
+# 不要把 chatgpt/openai 的核心 API 或 sentinel URL 加到这里。
+# `**` 用于匹配 URL 中的任意路径；Roxy/Cloak 的 Playwright/Selenium 会读取这组规则。
+BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS: list[str] = [
+    "**://auth.openai.com/awe/api/v2/rum**",
+    "**://chatgpt.com/ces/statsc/flush**",
+    "**://connect.facebook.net/**",
+    "**://analytics.tiktok.com/**",
+    "**://snap.licdn.com/**",
+    "**://bat.bing.com/**",
+    "**://accounts.google.com/gsi/client**",
+]
+
+# ---------- Roxy/Cloak 浏览器流量明细日志 ----------
+# 默认关闭；开启后在每次注册结束时按单请求总字节降序输出资源 URL、类型、状态和大小。
+# URL 查询参数值会脱敏，不保存请求/响应 body 或完整 Header 内容。
+BROWSER_TRAFFIC_DETAIL_LOG: bool = False
+BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES: int = 2000
+
+# ---------- Roxy/Cloak 浏览器 JS 精确覆盖率 ----------
+# 开启后通过 Chrome DevTools Protocol Profiler 记录本次会话实际执行过的
+# JavaScript 函数/代码范围。只保存函数名、调用计数和 offset，不读取参数、返回值
+# 或源码；Browser Use/Skyvern 云端浏览器不启用该监听；默认关闭，避免给正常注册增加额外开销。
+BROWSER_JS_COVERAGE_LOG: bool = False
+BROWSER_JS_COVERAGE_MAX_ENTRIES: int = 1000
 COUNTRY_LOCALE_PROFILE_MAP = {
     "JP": "jp", "CN": "cn", "HK": "hk", "TW": "tw", "US": "us", "CA": "us",
     "SG": "sg", "GB": "gb", "AU": "gb", "DE": "de", "FR": "fr", "NL": "nl",
@@ -133,7 +174,7 @@ def _locale_profile_key_from_geo(geo: dict | None) -> str:
 
 def _build_locale_from_geo(geo: dict | None) -> dict:
     key = _locale_profile_key_from_geo(geo)
-    locale = dict(BROWSER_LOCALE_PROFILES.get(key, BROWSER_LOCALE_PROFILES.get(BROWSER_LOCALE_PROFILE, BROWSER_LOCALE_PROFILES["jp"])))
+    locale = dict(BROWSER_LOCALE_PROFILES.get(key, BROWSER_LOCALE_PROFILES[BROWSER_LOCALE_PROFILE]))
     if geo and AUTO_BROWSER_LOCALE_FROM_IP:
         tz = str(geo.get("timezone") or "").strip()
         if tz:
@@ -300,9 +341,10 @@ def validate_browser_profile(profile: dict) -> list[str]:
     return issues
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool'})
+apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool', 'BROWSER_DATA_SAVER_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES': 'list_str_multiline', 'BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS': 'list_str_multiline', 'BROWSER_TRAFFIC_DETAIL_LOG': 'bool', 'BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES': 'int', 'BROWSER_JS_COVERAGE_LOG': 'bool', 'BROWSER_JS_COVERAGE_MAX_ENTRIES': 'int'})
 
 # WebUI 可能保存国家码（如 GB），而画像池内部使用小写区域键（gb）。
+# 这些派生值必须在读取 .env 覆盖后重新计算。
 BROWSER_LOCALE_PROFILE = str(BROWSER_LOCALE_PROFILE or "jp").strip().lower()
 if BROWSER_LOCALE_PROFILE not in BROWSER_LOCALE_PROFILES:
     BROWSER_LOCALE_PROFILE = "jp"

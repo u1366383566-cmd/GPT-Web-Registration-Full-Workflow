@@ -126,6 +126,8 @@ def _msg_to_dict(msg) -> dict:
     subject = _decode_email_header(msg.get("Subject") or msg.get("subject") or "")
     from_ = _decode_email_header(msg.get("From") or msg.get("from") or "")
     to_ = _decode_email_header(msg.get("To") or msg.get("to") or "")
+    delivered_to = _decode_email_header(msg.get("Delivered-To") or "")
+    original_to = _decode_email_header(msg.get("X-Original-To") or "")
     body_text = _get_msg_text(msg)
     ts = _parse_email_date(msg)
     ts_str = (
@@ -136,6 +138,8 @@ def _msg_to_dict(msg) -> dict:
         "subject": subject,
         "from": from_,
         "to": to_,
+        "deliveredTo": delivered_to,
+        "xOriginalTo": original_to,
         "sendEmail": from_,
         "text": body_text,
         "bodyPreview": body_text,

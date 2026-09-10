@@ -198,8 +198,8 @@
       width: 100%; max-width: 100%; min-width: 0;
       max-height: 320px; overflow: auto; line-height: 1.5;
     }
-    #logPanel, #retryLogPanel, #liveLogPanel, #totpLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
-    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #totpLogPanel:not(.hidden), #qrPanel:not(.hidden) {
+    #logPanel, #retryLogPanel, #liveLogPanel, #totpLogPanel, #emailChangeLogPanel, #qrPanel { min-width: 0; max-width: 100%; overflow-x: hidden; }
+    #logPanel:not(.hidden), #retryLogPanel:not(.hidden), #liveLogPanel:not(.hidden), #totpLogPanel:not(.hidden), #emailChangeLogPanel:not(.hidden), #qrPanel:not(.hidden) {
       position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
       z-index: 1000; display: block; width: min(1100px, calc(100vw - 48px));
       max-height: min(760px, calc(100vh - 48px)); overflow: hidden;
@@ -207,9 +207,9 @@
       background: var(--surface); box-shadow: 0 0 0 9999px rgba(15,23,42,.45), 0 24px 70px rgba(15,23,42,.34);
     }
     #qrPanel:not(.hidden) { width: min(520px, calc(100vw - 48px)); text-align: center; }
-    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #totpLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #totpLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
-    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #totpLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
+    #logPanel h3, #retryLogPanel h3, #liveLogPanel h3, #totpLogPanel h3, #emailChangeLogPanel h3, #qrPanel h3 { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+    #logPanel h3 .btn, #retryLogPanel h3 .btn, #liveLogPanel h3 .btn, #totpLogPanel h3 .btn, #emailChangeLogPanel h3 .btn, #qrPanel h3 .btn { margin-left:auto; float:none !important; }
+    #logPanel .log, #retryLogPanel .log, #liveLogPanel .log, #totpLogPanel .log, #emailChangeLogPanel .log { max-height: calc(min(760px, calc(100vh - 48px)) - 74px); margin-top:0; }
     #qrPanel img { display:block; max-width:min(360px, calc(100vw - 96px)); max-height:420px; margin:12px auto; border:1px solid var(--line); border-radius:10px; background:#fff; }
     #qrPanel .qr-link { display:block; word-break:break-all; white-space:normal; font-size:12px; color:var(--muted); margin-top:8px; }
     .hidden { display: none !important; }
@@ -369,11 +369,6 @@
     .jobs-toolbar-v2 .jobs-tb-field {
       display: inline-flex; align-items: center; gap: 8px;
       color: #606266; font-size: 14px; white-space: nowrap;
-    }
-    .jobs-toolbar-v2 .jobs-tb-field select {
-      height: 32px; padding: 0 8px;
-      border: 1px solid #dcdfe6; border-radius: 6px;
-      background: #fff; color: #606266; font: inherit; font-size: 13px;
     }
     .accounts-filter-v2 .acc-v2-date {
       height: 40px; padding: 0 8px;
@@ -584,6 +579,7 @@
     .jobs-table-v2 .col-status { width: 110px; }
     .jobs-table-v2 .col-email { min-width: 200px; width: 24%; }
     .jobs-table-v2 .col-time { width: 170px; }
+    .jobs-table-v2 .col-traffic { width: 120px; white-space: nowrap; }
     .jobs-table-v2 .col-error { width: auto; min-width: 160px; }
     .jobs-table-v2 .col-actions {
       width: 168px; overflow: visible; text-overflow: clip; white-space: nowrap;
@@ -740,7 +736,7 @@
       text-align: left; vertical-align: middle;
     }
     .accounts-table-v2 .col-id { width: 72px; }
-    .accounts-table-v2 .col-email { width: 240px; }
+    .accounts-table-v2 .col-email { width: 330px; }
     .accounts-table-v2 .col-source { width: 90px; }
     .accounts-table-v2 .col-token { width: 100px; }
     .accounts-table-v2 .col-password { width: 120px; }
@@ -750,7 +746,7 @@
     .accounts-table-v2 .col-status { width: 100px; }
     .accounts-table-v2 .col-agent { width: 140px; }
     .accounts-table-v2 .col-time { width: 170px; }
-    .accounts-table-v2 .col-actions { width: 160px; }
+    .accounts-table-v2 .col-actions { width: 148px; }
     .accounts-table-v2 input[type="checkbox"] {
       width: 16px !important; height: 16px !important;
       min-width: 16px !important; min-height: 16px !important;
@@ -788,11 +784,23 @@
     }
     .accounts-table-v2 .acc-v2-email {
       font-weight: 700; color: #303133; line-height: 1.35;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      overflow: visible; text-overflow: clip; white-space: normal;
+      overflow-wrap: anywhere; word-break: break-word;
     }
     .accounts-table-v2 .acc-v2-sub {
       margin-top: 2px; color: #909399; font-size: 12px; line-height: 1.3;
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .accounts-table-v2 .acc-v2-email-history,
+    .accounts-table-v2 .acc-v2-email-user {
+      margin-top: 2px; color: #909399; font-size: 12px; line-height: 1.35;
+      white-space: normal; overflow: visible; text-overflow: clip;
+      overflow-wrap: anywhere; word-break: break-word;
+    }
+    .accounts-table-v2 .acc-v2-email-user { color: #606266; }
+    .accounts-table-v2 .acc-v2-email-status {
+      margin-top: 2px; color: #e6a23c; font-size: 12px; line-height: 1.35;
+      white-space: normal; overflow-wrap: anywhere;
     }
     .accounts-table-v2 .acc-v2-muted { color: #c0c4cc; }
     .accounts-table-v2 .pill {
@@ -887,13 +895,15 @@
       opacity: .55; cursor: not-allowed;
     }
     .accounts-table-v2 .acc-v2-actions {
-      display: flex; flex-wrap: nowrap; gap: 6px; align-items: center;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-items: center;
+      width: 100%;
     }
     .accounts-table-v2 .acc-v2-actions > button {
       min-height: 28px; padding: 0 10px; border-radius: 4px;
       border: 1px solid #dcdfe6; background: #fff; color: #606266;
       font: inherit; font-size: 12px; cursor: pointer; line-height: 1;
       white-space: nowrap;
+      width: 100%; padding-left: 6px; padding-right: 6px;
     }
     .accounts-table-v2 .acc-v2-actions > button:hover:not(:disabled) {
       color: #377DFF; border-color: #c6e2ff; background: #ecf5ff;
@@ -913,12 +923,13 @@
     .accounts-table-v2 .acc-v2-actions > button:disabled {
       opacity: .55; cursor: not-allowed;
     }
-    .accounts-table-v2 .acc-v2-more { position: relative; flex-shrink: 0; }
+    .accounts-table-v2 .acc-v2-more { position: relative; min-width: 0; }
     .accounts-table-v2 .acc-v2-more-btn {
       min-height: 28px; padding: 0 10px; border-radius: 4px;
       border: 1px solid #dcdfe6; background: #fff; color: #606266;
       font: inherit; font-size: 12px; cursor: pointer; line-height: 1;
       white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;
+      width: 100%; justify-content: center; box-sizing: border-box;
     }
     .accounts-table-v2 .acc-v2-more-btn:hover,
     .accounts-table-v2 .acc-v2-more.open .acc-v2-more-btn {
@@ -931,17 +942,20 @@
     }
     .accounts-table-v2 .acc-v2-more-menu {
       display: none; position: fixed; z-index: 4000;
-      min-width: 148px; padding: 4px 0;
+      width: 320px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px);
+      grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px;
+      padding: 6px; overflow-y: auto; overscroll-behavior: contain;
       background: #fff; border: 1px solid #e4e7ed; border-radius: 6px;
       box-shadow: 0 6px 16px rgba(0,0,0,.12);
     }
-    .accounts-table-v2 .acc-v2-more.open .acc-v2-more-menu { display: block; }
+    .accounts-table-v2 .acc-v2-more.open .acc-v2-more-menu { display: grid; }
     .accounts-table-v2 .acc-v2-more-menu button {
       display: block; width: 100%; box-sizing: border-box;
       border: none; border-radius: 0; background: transparent;
       color: #606266; font: inherit; font-size: 13px;
-      text-align: left; padding: 8px 14px; min-height: 0; line-height: 1.4;
-      cursor: pointer; white-space: nowrap;
+      text-align: left; padding: 8px 10px; min-height: 34px; line-height: 1.35;
+      cursor: pointer; white-space: normal; overflow-wrap: anywhere;
+      border-radius: 4px;
     }
     .accounts-table-v2 .acc-v2-more-menu button:hover:not(:disabled) {
       background: #f5f7fa; color: #377DFF;
@@ -961,6 +975,11 @@
     }
     .accounts-table-v2 .acc-v2-more-menu button:disabled {
       opacity: .45; cursor: not-allowed;
+    }
+    @media (max-width: 480px) {
+      .accounts-table-v2 .acc-v2-more-menu {
+        width: calc(100vw - 16px); grid-template-columns: 1fr;
+      }
     }
     .accounts-panel-v2 .jobs-v2-pager {
       border-top: 1px solid #ebeef5;
@@ -990,7 +1009,7 @@
       background: #fafbfc;
     }
     .accounts-filter-v2 .acc-v2-search-wrap {
-      flex: 0 1 320px; width: 320px; max-width: 100%; min-width: 200px; padding: 4px 8px;
+      flex: 0 1 260px; width: 260px; max-width: 100%; min-width: 200px; padding: 4px 8px;
     }
     .accounts-filter-v2 .acc-v2-search-wrap input {
       width: 100%; min-width: 0; min-height: 32px !important; margin: 0;
@@ -1052,6 +1071,13 @@
     .accounts-filter-v2 .el-input-number__increase svg,
     .accounts-filter-v2 .el-input-number__decrease svg {
       width: 11px; height: 11px;
+    }
+    @media (max-width: 900px) {
+      .accounts-filter-v2 { flex-wrap: wrap; }
+      .accounts-filter-v2 .acc-v2-btn-group { flex-wrap: wrap; }
+      .accounts-filter-v2 .acc-v2-search-wrap {
+        flex-basis: 100%; width: 100%;
+      }
     }
     #accountsToolbarV2 { padding-top: 12px; }
 
@@ -1541,7 +1567,7 @@
     .outlook-panel-v2 .jobs-v2-pager { border-top: 1px solid #ebeef5; }
 
     /* ---- 邮箱池导入弹窗 ---- */
-    #outlookImportModal:not(.hidden) {
+    #outlookImportModal:not(.hidden), #emailChangeModalV2:not(.hidden) {
       position: fixed; inset: 0; z-index: 1200;
       display: flex; align-items: center; justify-content: center;
       padding: 24px; box-sizing: border-box;
@@ -1640,6 +1666,13 @@
     .outlook-import-body textarea:focus {
       outline: none; border-color: #377DFF;
       box-shadow: 0 0 0 3px rgba(55,125,255,.12);
+    }
+    .outlook-import-body input[type="text"],
+    .outlook-import-body input[type="number"],
+    .outlook-import-body select {
+      width: 100%; height: 40px; margin: 0; padding: 0 12px;
+      border: 1px solid #dcdfe6; border-radius: 8px; background: #fff;
+      color: #606266; font: inherit; font-size: 13px; box-sizing: border-box;
     }
     .outlook-import-result:empty { display: none; }
     .outlook-import-foot {
@@ -1822,10 +1855,22 @@
       line-height: 1.45; white-space: normal; overflow: visible;
       overflow-wrap: anywhere; word-break: break-word;
     }
-    .config-pool-subhead-v2 {
-      grid-column: 1 / -1; margin: 10px 0 -4px;
-      font-size: 14px; font-weight: 700; color: #303133;
+    .config-field-wrap { min-width: 0; }
+    .config-field-wrap > label.fld { margin-bottom: 0; }
+    .config-external-link {
+      display: inline-flex; align-items: center; gap: 4px; margin-top: 7px;
+      color: #377DFF; font-size: 12px; font-weight: 500; text-decoration: none;
     }
+    .config-external-link:hover { text-decoration: underline; }
+    .config-recommendations {
+      margin-top: 9px; padding: 10px 12px;
+      border: 1px solid #e6f0ff; border-radius: 8px; background: #f7fbff;
+      font-size: 12px; line-height: 1.55; color: #606266;
+    }
+    .config-recommendations-title { color: #303133; font-weight: 600; }
+    .config-recommendations-item { display: block; margin-top: 4px; }
+    .config-recommendations-item a { color: #377DFF; font-weight: 500; text-decoration: none; }
+    .config-recommendations-item a:hover { text-decoration: underline; }
     .config-section-v2-actions {
       margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px;
     }
@@ -1868,6 +1913,13 @@
     .config-subtabs-v2 button.active { background: #ecf5ff; color: #377DFF; font-weight: 600; }
     .config-section-v2-subhelp {
       margin: 12px 0 0; font-size: 13px; color: #909399; line-height: 1.5;
+    }
+    .remail-promo-notice {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin: 0 0 0 10px; padding: 8px 12px;
+      color: #b42318; background: #fff1f0; border: 1px solid #fecdca;
+      border-radius: 8px; font-size: 13px; font-weight: 700; line-height: 1.4;
+      vertical-align: middle; white-space: nowrap;
     }
     .config-switches-v2 + .config-section-v2-body {
 
@@ -2099,14 +2151,6 @@
         <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedJobsV2" disabled title="删除选中的非运行中任务，并同时删除对应日志">删除选中</button>
         <button type="button" class="jobs-tb-btn" id="btnCancelPendingV2" title="把所有排队任务标记为已取消">取消全部排队</button>
         <button type="button" class="jobs-tb-btn" id="btnRefreshJobsV2" title="手动刷新任务列表">刷新</button>
-        <button type="button" class="jobs-tb-btn" id="btnImportAllSuccessJobsChatgpt2ApiV2" title="将所有成功任务对应的账号导入 ChatGPT2API">一键导入成功账号</button>
-        <label class="jobs-tb-field">导入目标
-          <select data-chatgpt-import-target aria-label="ChatGPT2API 导入目标">
-            <option value="legacy">旧版反代</option>
-            <option value="new">新版反代</option>
-            <option value="both">旧版 + 新版</option>
-          </select>
-        </label>
         <label class="jobs-tb-field">注册数量
           <span class="el-input-number">
             <input id="regCountV2" type="number" min="1" max="200" value="1" inputmode="numeric">
@@ -2136,7 +2180,7 @@
         <table class="jobs-table-v2">
           <colgroup>
             <col class="col-check"><col class="col-id"><col class="col-status"><col class="col-email">
-            <col class="col-time"><col class="col-time"><col class="col-error"><col class="col-actions">
+            <col class="col-time"><col class="col-time"><col class="col-traffic"><col class="col-error"><col class="col-actions">
           </colgroup>
           <thead>
             <tr>
@@ -2146,6 +2190,7 @@
               <th class="col-email">邮箱</th>
               <th class="col-time">开始</th>
               <th class="col-time">完成</th>
+              <th class="col-traffic">流量</th>
               <th class="col-error">错误</th>
               <th class="col-actions">操作</th>
             </tr>
@@ -2181,6 +2226,8 @@
           </label>
           <button type="button" class="acc-v2-toggle" id="showArchivedAccountsV2" aria-pressed="false" title="默认只显示未归档账号；开启后单独查看归档账号">查看归档</button>
           <button type="button" class="acc-v2-toggle" id="showPlusAccountsOnlyV2" aria-pressed="false" title="只查询/显示已开通 Plus 的账号">已开通Plus</button>
+          <button type="button" class="acc-v2-toggle" id="showPlusTrialAccountsOnlyV2" aria-pressed="false" title="只查询/显示当前为 free 且可试用 Plus 的账号">可试用Plus</button>
+          <button type="button" class="acc-v2-toggle" id="showFreeAccountsOnlyV2" aria-pressed="false" title="只查询/显示已明确不能试用 Plus 的 free 账号；资格未知的账号不包含">free不可试用Plus</button>
           <label class="acc-v2-inline" title="按账号状态筛选账号">
             <select id="codexStatusFilterV2">
               <option value="">全部状态</option>
@@ -2192,6 +2239,15 @@
               <option value="deactivated">账号废号</option>
             </select>
           </label>
+          <label class="acc-v2-inline" title="按账号 2FA/TOTP 状态筛选账号">
+            <select id="totpStatusFilterV2">
+              <option value="">2FA：全部</option>
+              <option value="enabled">2FA：已开启</option>
+              <option value="disabled">2FA：未开启</option>
+              <option value="pending">2FA：设置中</option>
+              <option value="failed">2FA：设置失败</option>
+            </select>
+          </label>
           <div class="acc-v2-date-select" id="dateSelectAccountsV2">
             <button type="button" class="acc-v2-date-select-btn" id="btnDateFilterAccountsV2" title="按注册时间筛选日期范围">📅 日期筛选</button>
             <div class="acc-v2-date-select-menu" id="dateFilterPanelAccountsV2"></div>
@@ -2201,7 +2257,6 @@
             <input type="date" id="dateToAccountsV2">
           </div>
           <button type="button" class="jobs-tb-btn" id="btnRefreshAccountsV2" title="重新加载当前筛选条件和当前页账号列表">刷新账号</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveTopV2" onclick="checkSelectedLive()" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
 
         </div>
       </div>
@@ -2220,27 +2275,20 @@
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">批量</span>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSetupSelectedTotpV2" disabled title="给选中的账号批量开启 2FA，并在完成后写回 TOTP 密钥">批量开2FA</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnChangeSelectedEmailsV2" disabled title="为选中的账号从指定邮箱来源领取新邮箱并换绑">批量换邮箱</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnNoteSelectedAccountsV2" disabled title="给选中的账号统一设置备注，留空可清空备注">备注</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedLinesV2" disabled title="复制选中账号的完整整行，每个账号一行">复制行</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedTokensV2" disabled title="复制选中账号的 Token，每个账号一行">复制Token</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedEmailsV2" disabled title="复制选中账号的邮箱，每个账号一行">复制邮箱</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedTxtV2" disabled title="把选中账号的完整整行保存为 TXT 文件，每个账号一行">下载TXT</button>
-          <label class="jobs-tb-field">目标
-            <select data-chatgpt-import-target aria-label="ChatGPT2API 导入目标">
-              <option value="legacy">旧版</option>
-              <option value="new">新版</option>
-              <option value="both">两版</option>
-            </select>
-          </label>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnImportSelectedChatgpt2ApiV2" disabled title="把选中账号直接导入已配置的 ChatGPT2API 账号池">导入ChatGPT2API</button>
-           <button type="button" class="jobs-tb-btn" id="btnArchiveSelectedAccountsV2" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档选中</button>
+          <button type="button" class="jobs-tb-btn" id="btnArchiveSelectedAccountsV2" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档选中</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedAccountsV2" disabled title="删除选中的本地账号/token记录">删除</button>
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">全部</span>
-           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCopyAllTokensV2" title="复制当前页所有 Token，每个账号一行">复制Token</button>
-           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopyAllLinesV2" title="复制当前页所有账号整行，每个账号一行">复制整行</button>
-           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnImportAllChatgpt2ApiV2" title="把全部未归档成功账号一键导入已配置的 ChatGPT2API 账号池">一键导入ChatGPT2API</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCopyAllTokensV2" title="复制当前页所有 Token，每个账号一行">复制Token</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopyAllLinesV2" title="复制当前页所有账号整行，每个账号一行">复制整行</button>
         </div>
       </div>
       <div class="accounts-table-v2-wrap">
@@ -2288,6 +2336,12 @@
         <button class="btn" id="btnCloseTotpLog" style="float:right;min-height:28px;">关闭</button>
       </h3>
       <div class="log" id="totpLogContent">加载中…</div>
+    </div>
+    <div class="body hidden" id="emailChangeLogPanel">
+      <h3>换绑日志：<span id="emailChangeLogAccount" style="font-size:13px;font-weight:400;color:var(--muted);"></span>
+        <button class="btn" id="btnCloseEmailChangeLog" style="float:right;min-height:28px;">关闭</button>
+      </h3>
+      <div class="log" id="emailChangeLogContent">加载中…</div>
     </div>
   </div>
 
@@ -2381,6 +2435,7 @@
             <button type="button" class="outlook-v2-select-item is-active" data-value="all" role="option">全部邮箱池</button>
             <button type="button" class="outlook-v2-select-item" data-value="outlook" role="option">Outlook 邮箱池</button>
             <button type="button" class="outlook-v2-select-item" data-value="generic_api" role="option">通用 API 邮箱池</button>
+            <button type="button" class="outlook-v2-select-item" data-value="imap" role="option">通用 IMAP 邮箱池</button>
             <button type="button" class="outlook-v2-select-item" data-value="cloudflare_domain" role="option">域名邮箱池</button>
           </div>
           <input type="hidden" id="poolSourceV2" value="all">
@@ -2473,7 +2528,7 @@
     <div class="outlook-import-head">
       <div class="outlook-import-head-main">
         <h3 id="outlookImportTitle">导入邮箱素材</h3>
-        <p>Outlook：邮箱----密码----clientId----refreshToken；通用 API：邮箱----取码地址（---- 或 ==== 均可）。默认按「已注册成功账号」导入，方便在账号页补跑 Codex。</p>
+        <p>Outlook：邮箱----密码----clientId----refreshToken；通用 API：邮箱----取码地址；通用 IMAP 邮箱每行仅需“邮箱----IMAP密码”或“邮箱:IMAP密码”，服务器参数在下方统一配置。</p>
       </div>
       <button type="button" class="outlook-import-close" id="btnCloseOutlookImport" aria-label="关闭">×</button>
     </div>
@@ -2486,14 +2541,29 @@
           <div class="outlook-v2-select-menu" role="listbox">
             <button type="button" class="outlook-v2-select-item is-active" data-value="outlook" role="option">Outlook 邮箱池</button>
             <button type="button" class="outlook-v2-select-item" data-value="generic_api" role="option">通用 API 取码邮箱</button>
+            <button type="button" class="outlook-v2-select-item" data-value="imap" role="option">通用 IMAP 取码邮箱</button>
           </div>
           <input type="hidden" id="importSourceV2" value="outlook">
         </div>
-        <span class="outlook-import-hint">注册来源可在配置里填多个，例如：outlook,generic_api</span>
+        <span class="outlook-import-hint">注册来源可在配置里填多个，例如：outlook,generic_api,imap</span>
       </label>
+      <div id="imapImportSettingsV2" class="hidden" style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;">
+        <label class="outlook-import-field">
+          <span>IMAP 服务器</span>
+          <input id="imapServerV2" type="text" placeholder="imap.example.com" autocomplete="off">
+        </label>
+        <label class="outlook-import-field">
+          <span>端口</span>
+          <input id="imapPortV2" type="number" min="1" max="65535" value="993">
+        </label>
+        <label class="outlook-import-field">
+          <span>SSL</span>
+          <select id="imapSslV2"><option value="true" selected>启用</option><option value="false">不启用</option></select>
+        </label>
+      </div>
       <label class="outlook-import-check">
         <input id="importAsRegisteredV2" type="checkbox">
-        <span>导入后视为「注册成功账号」（邮箱池标记已用，并出现在账号页，可直接批量补跑 Codex；导入待注册的新邮箱请勿勾选）</span>
+        <span>导入后视为「注册成功账号」（邮箱池标记已用，并出现在账号页；导入待注册的新邮箱请勿勾选）</span>
       </label>
       <label class="outlook-import-field">
         <span>邮箱素材</span>
@@ -2504,6 +2574,20 @@
       <button type="button" class="jobs-tb-btn" id="btnCancelOutlookImport">取消</button>
       <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSubmitOutlookImport">导入</button>
     </div>
+  </div>
+</div>
+<div id="emailChangeModalV2" class="hidden" role="dialog" aria-modal="true">
+  <div class="outlook-import-dialog" role="document" style="max-width:520px;">
+    <div class="outlook-import-head"><div class="outlook-import-head-main"><h3>邮箱换绑</h3><p id="emailChangeHintV2">选择新邮箱来源。系统将自动领取邮箱、发送并验证 OTP。</p></div><button type="button" class="outlook-import-close" id="btnCloseEmailChangeV2">×</button></div>
+    <div class="outlook-import-body">
+      <label class="outlook-import-field"><span>新邮箱来源</span><select id="emailChangeSourceV2">
+        <option value="outlook">Outlook 邮箱池</option><option value="generic_api">通用 API</option><option value="imap">通用 IMAP</option>
+        <option value="cloudflare_domain">Cloudflare 域名邮箱</option><option value="cloudflare">Cloudflare 临时邮箱</option>
+        <option value="gptmail">GPTMail</option><option value="mailnest">MailNest</option><option value="mailcx">Mail.cx</option><option value="cloudmail">CloudMail</option><option value="remail">Remail</option>
+      </select></label>
+      <div class="banner warn">换绑成功后当前 access_token 会失效并被清空，系统会立即使用新邮箱自动查活并刷新 AT。原邮箱会保留在账号记录中。</div>
+    </div>
+    <div class="outlook-import-foot"><button type="button" class="jobs-tb-btn" id="btnCancelEmailChangeV2">取消</button><button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSubmitEmailChangeV2">开始换绑</button></div>
   </div>
 </div>
 <div class="body hidden" id="logPanel">
@@ -2527,6 +2611,8 @@ const TOTP_CODE_CACHE = new Map();
 let OUTLOOK_TOTAL = 0;
 let SHOW_ARCHIVED_ACCOUNTS = false;
 let SHOW_PLUS_ACCOUNTS_ONLY = false;
+let SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = false;
+let SHOW_FREE_ACCOUNTS_ONLY = false;
 const ACCOUNT_SELECTED = new Set();
 const OUTLOOK_SELECTED = new Set();
 let JOBS = [];
@@ -2695,6 +2781,19 @@ function formatDateTime(v) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
+function formatTraffic(t) {
+  if (!t || !t.available) return '-';
+  const n = (v) => Number.isFinite(Number(v)) ? Math.max(0, Number(v)) : 0;
+  const fmt = (v) => {
+    v = n(v);
+    if (v < 1024) return `${Math.round(v)} B`;
+    if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KiB`;
+    return `${(v / 1024 / 1024).toFixed(2)} MiB`;
+  };
+  const j = t.js_coverage;
+  const jsHint = j && j.enabled ? `，JS脚本 ${n(j.script_count)}（执行 ${n(j.executed_script_count)}，候选 ${n(j.candidate_script_count)}）` : '';
+  return `<span title="上传 ${fmt(t.upload_bytes)}，下载 ${fmt(t.download_bytes)}，${n(t.request_count)} 个请求${jsHint}">${fmt(t.total_bytes)}</span>`;
+}
 function jobsV2OpIcons() {
   return {
     view: `<svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`,
@@ -2716,7 +2815,7 @@ async function copyText(text) {
 async function api(url, opts) {
   const r = await fetch(url, opts);
   const j = await r.json().catch(()=>({}));
-  if (!r.ok && r.status !== 207) throw new Error(j.error || ('HTTP '+r.status));
+  if (!r.ok) throw new Error(j.error || ('HTTP '+r.status));
   return j;
 }
 function debounce(fn, wait=250) {
@@ -2836,8 +2935,6 @@ function bindJobsBodyEvents(bodyEl) {
     }
     const delBtn = e.target.closest('[data-delete-job]');
     if (delBtn) deleteJob(parseInt(delBtn.dataset.deleteJob, 10), delBtn);
-    const importBtn = e.target.closest('[data-import-job-chatgpt2api]');
-    if (importBtn) importSuccessfulJobsToChatgpt2Api([parseInt(importBtn.dataset.importJobChatgpt2api, 10)], importBtn);
   });
   bodyEl.addEventListener('change', (e) => {
     const cb = e.target.closest('.job-row-check');
@@ -2861,8 +2958,6 @@ function bindJobsBodyEvents(bodyEl) {
   if (cancelV2) cancelV2.addEventListener('click', () => cancelAllPendingJobs(cancelV2));
   const refreshV2 = $('#btnRefreshJobsV2');
   if (refreshV2) refreshV2.addEventListener('click', refreshJobs);
-  const importAllSuccessV2 = $('#btnImportAllSuccessJobsChatgpt2ApiV2');
-  if (importAllSuccessV2) importAllSuccessV2.addEventListener('click', () => importSuccessfulJobsToChatgpt2Api([], importAllSuccessV2, true));
 
   function stepInputNumber(inputId, delta) {
     const el = document.getElementById(inputId);
@@ -2906,6 +3001,7 @@ function renderJobs() {
         <td class="col-email" title="${esc(j.email || '-')}">${esc(j.email || '-')}</td>
         <td class="col-time" title="${esc(started)}">${esc(started)}</td>
         <td class="col-time" title="${esc(completed)}">${esc(completed)}</td>
+        <td class="col-traffic">${formatTraffic(j.network_traffic)}</td>
         <td class="col-error" title="${esc(err)}">${esc(err ? short(err, 60) : '-')}</td>
         <td class="col-actions">
           <div class="jobs-v2-ops">
@@ -2913,12 +3009,11 @@ function renderJobs() {
             ${manualOtp ? `<input class="manual-otp-input manual-otp-input--v2" data-otp-email="${esc(j.email)}" data-otp-job="${esc(j.id)}" placeholder="邮箱验证码" maxlength="8" title="手动模式下，打开邮箱后把 6 位验证码贴这里"><button type="button" class="jobs-v2-op jobs-v2-op--otp" data-submit-otp-job="${esc(j.id)}" data-email="${esc(j.email)}" title="提交验证码">${icons.check}</button>` : ''}
             ${stoppable ? `<button type="button" class="jobs-v2-op jobs-v2-op--stop" data-stop-job="${esc(j.id)}" title="${j.status === 'stopping' ? '停止/修复' : '停止'}">${icons.stop}</button>` : ''}
             ${j.retryable ? `<button type="button" class="jobs-v2-op jobs-v2-op--retry" data-retry-job="${esc(j.id)}" title="${esc(j.retry_action === 'codex' ? '账号已创建，仅补跑 Codex 授权' : (j.retry_label || '重试'))}">${icons.retry}</button>` : ''}
-            ${j.status === 'success' ? `<button type="button" class="jobs-v2-op" data-import-job-chatgpt2api="${esc(j.id)}" title="导入 ChatGPT2API">导入</button>` : ''}
             <button type="button" class="jobs-v2-op jobs-v2-op--del" data-delete-job="${esc(j.id)}" ${running ? 'disabled title="运行中的任务不能删除；如需删除请先停止"' : 'title="删除"'}>${icons.del}</button>
           </div>
         </td>
       </tr>`;
-    }).join('') || '<tr><td colspan="8" style="text-align:center;color:#909399;padding:28px;">暂无任务</td></tr>';
+    }).join('') || '<tr><td colspan="9" style="text-align:center;color:#909399;padding:28px;">暂无任务</td></tr>';
   }
 
 
@@ -2967,8 +3062,11 @@ function updateModalScrollLock() {
   const opened = !$('#logPanel').classList.contains('hidden')
     || !$('#retryLogPanel').classList.contains('hidden')
     || !$('#liveLogPanel').classList.contains('hidden')
+    || !$('#totpLogPanel').classList.contains('hidden')
+    || !$('#emailChangeLogPanel').classList.contains('hidden')
     || !$('#qrPanel').classList.contains('hidden')
-    || !$('#outlookImportModal').classList.contains('hidden');
+    || !$('#outlookImportModal').classList.contains('hidden')
+    || !$('#emailChangeModalV2').classList.contains('hidden');
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -3177,22 +3275,33 @@ function getAccountsCodexFilter() {
   const el = document.getElementById('codexStatusFilterV2');
   return (el ? el.value : '').trim();
 }
+function getAccountsTotpFilter() {
+  const el = document.getElementById('totpStatusFilterV2');
+  return (el ? el.value : '').trim();
+}
 function getCodexBulkWorkers() {
   const el = document.getElementById('codexBulkWorkersV2');
   return Math.max(1, Math.min(16, Number((el && el.value) || 3)));
+}
+function getAccountsPlanFilter() {
+  if (SHOW_PLUS_ACCOUNTS_ONLY) return 'plus';
+  if (SHOW_PLUS_TRIAL_ACCOUNTS_ONLY) return 'plus_trial';
+  if (SHOW_FREE_ACCOUNTS_ONLY) return 'free_no_trial';
+  return '';
 }
 async function loadAccounts() {
   if (accountsLoading) return;
   accountsLoading = true;
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
-    const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const plan = getAccountsPlanFilter();
     const codex = getAccountsCodexFilter();
+    const totp = getAccountsTotpFilter();
     const q = getAccountsQuery();
     const dateFrom = document.getElementById('dateFromAccountsV2')?.value || '';
     const dateTo = document.getElementById('dateToAccountsV2')?.value || '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
@@ -3206,13 +3315,14 @@ async function pollAccountPlanStatuses() {
   planStatusLoading = true;
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
-    const plan = SHOW_PLUS_ACCOUNTS_ONLY ? 'plus' : '';
+    const plan = getAccountsPlanFilter();
     const codex = getAccountsCodexFilter();
+    const totp = getAccountsTotpFilter();
     const q = getAccountsQuery();
     const dateFrom = document.getElementById('dateFromAccountsV2')?.value || '';
     const dateTo = document.getElementById('dateToAccountsV2')?.value || '';
     const p = PAGERS.accounts;
-    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
+    const snapshot = await api(`/api/accounts/plan-check-status?page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
     const items = snapshot.items || [];
     const accountById = new Map(ACCOUNTS.map(r => [Number(r.id), r]));
     const hasUnknown = items.some(item => !accountById.has(Number(item.id)));
@@ -3475,8 +3585,9 @@ function _tokenCellV2(r) {
 function _accountsV2MoreMenu(r) {
   const parts = [
     `<button type="button" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button>`,
-    r.has_access_token ? `<button type="button" data-chatgpt2api-import="${esc(r.id)}" title="导入到已配置的 ChatGPT2API 账号池">导入ChatGPT2API</button>` : '',
     `<button type="button" data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button>`,
+    `<button type="button" data-account-change-email="${esc(r.id)}" title="从指定邮箱来源领取新邮箱并换绑">换绑邮箱</button>`,
+    `<button type="button" data-account-change-email-log="${esc(r.id)}" title="查看最近一次邮箱换绑日志">换绑日志</button>`,
     `<button type="button" onclick="checkSelectedLive([Number('${esc(r.id)}')], this); return false;" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活刷新AT</button>`,
     `<button type="button" data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button>`,
     `<button type="button" data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button>`,
@@ -3499,14 +3610,15 @@ function positionAccountsV2MoreMenu(wrap) {
   const menu = wrap.querySelector('.acc-v2-more-menu');
   if (!btn || !menu) return;
   const rect = btn.getBoundingClientRect();
-  const menuW = Math.max(menu.offsetWidth || 148, 148);
-  const menuH = menu.offsetHeight || 0;
+  const menuW = Math.min(320, window.innerWidth - 16);
+  menu.style.width = `${menuW}px`;
+  menu.style.maxHeight = `${Math.max(160, window.innerHeight - 16)}px`;
+  const menuH = Math.min(menu.scrollHeight || menu.offsetHeight || 0, window.innerHeight - 16);
   let left = rect.right - menuW;
   left = Math.max(8, Math.min(left, window.innerWidth - menuW - 8));
   let top = rect.bottom + 4;
-  if (top + menuH > window.innerHeight - 8 && rect.top - menuH - 4 > 8) {
-    top = rect.top - menuH - 4;
-  }
+  if (top + menuH > window.innerHeight - 8) top = rect.top - menuH - 4;
+  top = Math.max(8, Math.min(top, window.innerHeight - menuH - 8));
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
 }
@@ -3517,9 +3629,11 @@ function renderAccounts() {
     <tr>
       <td class="col-check"><input type="checkbox" class="account-row-check" data-account-id="${esc(r.id)}" ${ACCOUNT_SELECTED.has(Number(r.id)) ? 'checked' : ''}></td>
       <td class="col-id">#${esc(r.id)}</td>
-      <td class="col-email" title="${esc(r.email || '')}">
+      <td class="col-email" title="${esc(r.email || '-')}${r.original_email ? `\n原邮箱: ${esc(r.original_email)}` : ''}\n${esc(r.user_name || '-')}">
         <div class="acc-v2-email">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div>
-        <div class="acc-v2-sub">${esc(r.user_name || '-')}</div>
+        ${r.original_email ? `<div class="acc-v2-email-history">原邮箱: ${esc(r.original_email)}</div>` : ''}
+        <div class="acc-v2-email-user">${esc(r.user_name || '-')}</div>
+        ${['queued','running'].includes(r.email_change_status) ? '<div class="acc-v2-email-status">换绑中</div>' : (r.email_change_status === 'failed' ? `<div class="acc-v2-email-status" title="${esc(r.email_change_error || '')}">换绑失败: ${esc(r.email_change_error || '-')}</div>` : '')}
       </td>
       <td class="col-source">${esc(r.email_source || '-')}</td>
       <td class="col-token">${_tokenCellV2(r)}</td>
@@ -3558,9 +3672,8 @@ function updateAccountSelectionUi(pageRows = null) {
   const v2Ids = [
     'btnCheckSelectedPlansV2', 'btnExtractSelectedLinksV2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
-    'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedTokensV2', 'btnCopySelectedEmailsV2',
+    'btnSetupSelectedTotpV2', 'btnChangeSelectedEmailsV2', 'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedTokensV2', 'btnCopySelectedEmailsV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
-    'btnImportSelectedChatgpt2ApiV2',
   ];
   v2Ids.forEach(id => {
     const el = document.getElementById(id);
@@ -3677,6 +3790,38 @@ function closeTotpLogModal() {
 }
 $('#btnCloseTotpLog').addEventListener('click', closeTotpLogModal);
 
+let emailChangeLogAccountId = null, emailChangeLogTimer = null;
+function openEmailChangeLog(accountId) {
+  emailChangeLogAccountId = Number(accountId);
+  $('#emailChangeLogAccount').textContent = `账号 #${emailChangeLogAccountId}`;
+  $('#emailChangeLogPanel').classList.remove('hidden');
+  $('#emailChangeLogContent').textContent = '加载中…';
+  updateModalScrollLock();
+  pollEmailChangeLog();
+  clearInterval(emailChangeLogTimer);
+  emailChangeLogTimer = setInterval(pollEmailChangeLog, 3000);
+}
+async function pollEmailChangeLog() {
+  if (!emailChangeLogAccountId) return;
+  try {
+    const r = await api(`/api/accounts/${encodeURIComponent(emailChangeLogAccountId)}/change-email-log`);
+    const content = $('#emailChangeLogContent');
+    const atBottom = content.scrollTop + content.clientHeight >= content.scrollHeight - 30;
+    content.textContent = r.log || '(暂无换绑日志)';
+    $('#emailChangeLogAccount').textContent = `账号 #${emailChangeLogAccountId}${r.email ? ' · ' + r.email : ''}`;
+    if (atBottom) content.scrollTop = content.scrollHeight;
+    if (!r.running) clearInterval(emailChangeLogTimer);
+  } catch(e) {}
+}
+function closeEmailChangeLog() {
+  $('#emailChangeLogPanel').classList.add('hidden');
+  updateModalScrollLock();
+  clearInterval(emailChangeLogTimer);
+  emailChangeLogTimer = null;
+  emailChangeLogAccountId = null;
+}
+$('#btnCloseEmailChangeLog').addEventListener('click', closeEmailChangeLog);
+
 // 账号操作按钮（事件委托）
 async function onAccountsBodyClick(e) {
   const moreToggle = e.target.closest('[data-acc-more-toggle]');
@@ -3775,15 +3920,21 @@ async function onAccountsBodyClick(e) {
     return;
   }
 
-  const importChatgpt2ApiBtn = e.target.closest('[data-chatgpt2api-import]');
-  if (importChatgpt2ApiBtn) {
-    await importAccountsToChatgpt2Api([Number(importChatgpt2ApiBtn.dataset.chatgpt2apiImport)], importChatgpt2ApiBtn);
-    return;
-  }
-
   const noteBtn = e.target.closest('[data-account-note]');
   if (noteBtn) {
     await editAccountNote(Number(noteBtn.dataset.accountNote), noteBtn);
+    return;
+  }
+
+  const changeEmailBtn = e.target.closest('[data-account-change-email]');
+  if (changeEmailBtn) {
+    openEmailChangeModal([Number(changeEmailBtn.dataset.accountChangeEmail)]);
+    return;
+  }
+
+  const changeEmailLogBtn = e.target.closest('[data-account-change-email-log]');
+  if (changeEmailLogBtn) {
+    openEmailChangeLog(Number(changeEmailLogBtn.dataset.accountChangeEmailLog));
     return;
   }
 
@@ -3932,7 +4083,41 @@ async function applyAccountsArchivedFilter(on) {
 }
 async function applyAccountsPlusFilter(on) {
   SHOW_PLUS_ACCOUNTS_ONLY = !!on;
+  if (SHOW_PLUS_ACCOUNTS_ONLY) {
+    SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = false;
+    SHOW_FREE_ACCOUNTS_ONLY = false;
+  }
   setAccountsFilterToggle($('#showPlusAccountsOnlyV2'), SHOW_PLUS_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showPlusTrialAccountsOnlyV2'), SHOW_PLUS_TRIAL_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showFreeAccountsOnlyV2'), SHOW_FREE_ACCOUNTS_ONLY);
+  ACCOUNT_SELECTED.clear();
+  PAGERS.accounts.page = 1;
+  await loadAccounts();
+  await pollAccountPlanStatuses();
+}
+async function applyAccountsPlusTrialFilter(on) {
+  SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = !!on;
+  if (SHOW_PLUS_TRIAL_ACCOUNTS_ONLY) {
+    SHOW_PLUS_ACCOUNTS_ONLY = false;
+    SHOW_FREE_ACCOUNTS_ONLY = false;
+  }
+  setAccountsFilterToggle($('#showPlusAccountsOnlyV2'), SHOW_PLUS_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showPlusTrialAccountsOnlyV2'), SHOW_PLUS_TRIAL_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showFreeAccountsOnlyV2'), SHOW_FREE_ACCOUNTS_ONLY);
+  ACCOUNT_SELECTED.clear();
+  PAGERS.accounts.page = 1;
+  await loadAccounts();
+  await pollAccountPlanStatuses();
+}
+async function applyAccountsFreeFilter(on) {
+  SHOW_FREE_ACCOUNTS_ONLY = !!on;
+  if (SHOW_FREE_ACCOUNTS_ONLY) {
+    SHOW_PLUS_ACCOUNTS_ONLY = false;
+    SHOW_PLUS_TRIAL_ACCOUNTS_ONLY = false;
+  }
+  setAccountsFilterToggle($('#showPlusAccountsOnlyV2'), SHOW_PLUS_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showPlusTrialAccountsOnlyV2'), SHOW_PLUS_TRIAL_ACCOUNTS_ONLY);
+  setAccountsFilterToggle($('#showFreeAccountsOnlyV2'), SHOW_FREE_ACCOUNTS_ONLY);
   ACCOUNT_SELECTED.clear();
   PAGERS.accounts.page = 1;
   await loadAccounts();
@@ -3969,6 +4154,12 @@ async function refreshAccountsList(btn) {
     PAGERS.accounts.page = 1;
     loadAccounts();
   });
+  const totpV2 = $('#totpStatusFilterV2');
+  if (totpV2) totpV2.addEventListener('change', () => {
+    ACCOUNT_SELECTED.clear();
+    PAGERS.accounts.page = 1;
+    loadAccounts();
+  });
 
   const archivedV2 = $('#showArchivedAccountsV2');
   if (archivedV2) archivedV2.addEventListener('click', () => {
@@ -3977,6 +4168,14 @@ async function refreshAccountsList(btn) {
   const plusV2 = $('#showPlusAccountsOnlyV2');
   if (plusV2) plusV2.addEventListener('click', () => {
     applyAccountsPlusFilter(!SHOW_PLUS_ACCOUNTS_ONLY);
+  });
+  const plusTrialV2 = $('#showPlusTrialAccountsOnlyV2');
+  if (plusTrialV2) plusTrialV2.addEventListener('click', () => {
+    applyAccountsPlusTrialFilter(!SHOW_PLUS_TRIAL_ACCOUNTS_ONLY);
+  });
+  const freeV2 = $('#showFreeAccountsOnlyV2');
+  if (freeV2) freeV2.addEventListener('click', () => {
+    applyAccountsFreeFilter(!SHOW_FREE_ACCOUNTS_ONLY);
   });
   const refreshV2 = $('#btnRefreshAccountsV2');
   if (refreshV2) refreshV2.addEventListener('click', () => refreshAccountsList(refreshV2));
@@ -4044,6 +4243,42 @@ async function setupAccountTotp(id, btn) {
     showToast('开启 2FA 失败: ' + err.message);
   } finally {
     if (btn) btn.disabled = false;
+  }
+}
+
+async function setupSelectedTotp() {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
+  if (!ids.length) { showToast('请先选择账号'); return; }
+  if (!confirm(`确定为选中的 ${ids.length} 个账号批量开启 2FA？\n\n任务会在后台排队执行，完成后自动把 TOTP 密钥写回账号信息。\n已经开启、没有 Token 或正在设置中的账号会自动跳过。`)) return;
+
+  const btn = document.getElementById('btnSetupSelectedTotpV2');
+  if (!btn) return;
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '入队中…';
+  try {
+    const r = await api('/api/accounts/totp-setup-bulk', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({account_ids: ids}),
+    });
+    (r.started || []).forEach(item => ACCOUNT_SELECTED.delete(Number(item.id)));
+    const skippedCount = Number(r.skipped_count ?? (r.skipped || []).length) || 0;
+    const busyCount = Number(r.busy_count ?? (r.busy || []).length) || 0;
+    const failedCount = Number(r.failed_count ?? (r.failed || []).length) || 0;
+    const details = [];
+    if (skippedCount) details.push(`跳过 ${skippedCount} 个`);
+    if (busyCount) details.push(`进行中 ${busyCount} 个`);
+    if (failedCount) details.push(`失败 ${failedCount} 个`);
+    showToast(`已入队 ${r.started_count || 0} 个${details.length ? '，' + details.join('，') : ''}`);
+    planStatusRevision = '';
+    await loadAccounts();
+    await pollAccountPlanStatuses();
+  } catch (err) {
+    showToast('批量开启 2FA 失败: ' + err.message);
+  } finally {
+    btn.textContent = oldText;
+    updateAccountSelectionUi();
   }
 }
 
@@ -4215,110 +4450,6 @@ function copySelectedAccountEmails() {
   if (!emails.length) { showToast('选中账号没有可复制的邮箱'); return; }
   copyText(emails.join('\n'));
   showToast(`已复制 ${emails.length} 个邮箱`);
-}
-
-function chatgptImportTargetValue() {
-  const saved = String((CONFIG || []).find(f => f.key === 'CHATGPT2API_IMPORT_TARGET')?.value || 'legacy').toLowerCase();
-  const stored = localStorage.getItem('gpt_chatgpt2api_import_target');
-  return ['legacy', 'new', 'both'].includes(stored) ? stored : (['legacy', 'new', 'both'].includes(saved) ? saved : 'legacy');
-}
-
-function syncChatgptImportTargets() {
-  const value = chatgptImportTargetValue();
-  document.querySelectorAll('[data-chatgpt-import-target]').forEach(select => {
-    select.value = value;
-  });
-}
-
-async function probeChatgptTargetsAfterSave(updatedKeys) {
-  const relevant = ['CHATGPT2API_BASE_URL', 'CHATGPT2API_NEW_BASE_URL', 'CHATGPT2API_IMPORT_TARGET'];
-  if (!(updatedKeys || []).some(key => relevant.includes(key))) return [];
-  try {
-    const target = chatgptImportTargetValue();
-    const result = await api('/api/chatgpt2api/probe', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({target}),
-    });
-    const warnings = [];
-    (result.targets || []).forEach(item => {
-      if (!item.ok) { warnings.push(`${item.label}服务探测失败：${item.error || '无法读取版本'}`); return; }
-      const major = Number.parseInt(String(item.version || '').split('.')[0], 10);
-      const expected = item.target === 'legacy' ? 1 : 3;
-      if (Number.isFinite(major) && major !== expected) {
-        warnings.push(`${item.label}探测到版本 ${item.version}，可能与所选目标不一致`);
-      }
-    });
-    return warnings;
-  } catch (err) {
-    return [`导入目标探测失败：${err.message}`];
-  }
-}
-
-function formatChatgptImportResult(result) {
-  const targets = Array.isArray(result.targets) ? result.targets : [];
-  if (targets.length <= 1) {
-    return `新增 ${result.added || 0}，重复跳过 ${result.skipped || 0}${result.errors ? `，失败 ${result.errors}` : ''}`;
-  }
-  const parts = targets.map(item => `${item.label}：新增 ${item.added || 0}，跳过 ${item.skipped || 0}`);
-  if ((result.target_errors || []).length) {
-    parts.push(`失败目标：${result.target_errors.map(item => item.label).join('、')}`);
-  }
-  return parts.join('；');
-}
-
-async function importAccountsToChatgpt2Api(accountIds, button = null, importAll = false) {
-  const ids = Array.from(new Set((accountIds || []).map(Number).filter(Number.isFinite)));
-  if (!importAll && !ids.length) { showToast('请先选择账号'); return; }
-  const target = chatgptImportTargetValue();
-  const targetLabel = {legacy: '旧版反代', new: '新版反代', both: '旧版 + 新版反代'}[target];
-  const countLabel = importAll ? '全部未归档成功账号' : `选中的 ${ids.length} 个账号`;
-  if (!confirm(`确定将${countLabel}导入 ${targetLabel}吗？\n\n将使用配置页中保存的对应地址和管理员密钥。重复账号会由目标账号池自动跳过。`)) return;
-  const oldLabel = button ? button.textContent : '';
-  if (button) { button.disabled = true; button.textContent = '导入中...'; }
-  try {
-    const r = await api('/api/accounts/import-chatgpt2api', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({...(importAll ? {all: true} : {account_ids: ids}), target}),
-    });
-    const localSkipped = (r.skipped_local || []).length;
-    showToast(`导入完成：${formatChatgptImportResult(r)}${localSkipped ? `，本地跳过 ${localSkipped}` : ''}`);
-  } catch (err) {
-    showToast('导入 ChatGPT2API 失败: ' + err.message);
-  } finally {
-    if (button) { button.textContent = oldLabel; button.disabled = false; }
-    updateAccountSelectionUi();
-  }
-}
-
-async function importSelectedAccountsToChatgpt2Api() {
-  await importAccountsToChatgpt2Api(Array.from(ACCOUNT_SELECTED), $('#btnImportSelectedChatgpt2ApiV2'));
-}
-
-async function importAllAccountsToChatgpt2Api() {
-  await importAccountsToChatgpt2Api([], $('#btnImportAllChatgpt2ApiV2'), true);
-}
-
-async function importSuccessfulJobsToChatgpt2Api(jobIds, button = null, importAll = false) {
-  const ids = Array.from(new Set((jobIds || []).map(Number).filter(Number.isFinite)));
-  if (!importAll && !ids.length) { showToast('请先选择成功任务'); return; }
-  const target = chatgptImportTargetValue();
-  const targetLabel = {legacy: '旧版反代', new: '新版反代', both: '旧版 + 新版反代'}[target];
-  const countLabel = importAll ? '全部成功任务对应的账号' : `任务 #${ids.join('、#')} 对应的账号`;
-  if (!confirm(`确定将${countLabel}导入 ${targetLabel}吗？\n\n将使用配置页中保存的对应地址和管理员密钥。重复账号会由目标账号池自动跳过。`)) return;
-  const oldLabel = button ? button.textContent : '';
-  if (button) { button.disabled = true; button.textContent = '导入中...'; }
-  try {
-    const r = await api('/api/jobs/import-chatgpt2api', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({...(importAll ? {all_success: true} : {job_ids: ids}), target}),
-    });
-    const localSkipped = (r.skipped_local || []).length;
-    showToast(`导入完成：${formatChatgptImportResult(r)}${localSkipped ? `，本地跳过 ${localSkipped}` : ''}`);
-  } catch (err) {
-    showToast('导入 ChatGPT2API 失败: ' + err.message);
-  } finally {
-    if (button) { button.textContent = oldLabel; button.disabled = false; }
-  }
 }
 
 async function downloadSelectedAccountTxt() {
@@ -4897,6 +5028,45 @@ async function copyCurrentPageLines() {
   if (!ids.length) { showToast('当前页没有账号'); return; }
   try { copyText((await fetchAccountSecrets(ids, 'copy_line')).join('\n')); } catch(e) { showToast('复制失败: ' + e.message); }
 }
+let EMAIL_CHANGE_ACCOUNT_IDS = [];
+function openEmailChangeModal(ids) {
+  EMAIL_CHANGE_ACCOUNT_IDS = (ids || []).map(Number).filter(Boolean);
+  if (!EMAIL_CHANGE_ACCOUNT_IDS.length) { showToast('请先选择账号'); return; }
+  $('#emailChangeHintV2').textContent = EMAIL_CHANGE_ACCOUNT_IDS.length === 1
+    ? `将为账号 #${EMAIL_CHANGE_ACCOUNT_IDS[0]} 换绑新邮箱，请选择来源。`
+    : `将为选中的 ${EMAIL_CHANGE_ACCOUNT_IDS.length} 个账号分别领取并换绑新邮箱。`;
+  $('#emailChangeModalV2').classList.remove('hidden');
+  updateModalScrollLock();
+}
+function closeEmailChangeModal() {
+  $('#emailChangeModalV2').classList.add('hidden');
+  EMAIL_CHANGE_ACCOUNT_IDS = [];
+  updateModalScrollLock();
+}
+async function submitEmailChange() {
+  const ids = EMAIL_CHANGE_ACCOUNT_IDS.slice();
+  const source = $('#emailChangeSourceV2').value;
+  if (!ids.length) return;
+  const btn = $('#btnSubmitEmailChangeV2');
+  btn.disabled = true;
+  try {
+    const url = ids.length === 1 ? `/api/accounts/${ids[0]}/change-email` : '/api/accounts/change-email-bulk';
+    const body = ids.length === 1 ? {source} : {source, account_ids: ids};
+    const r = await api(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    closeEmailChangeModal();
+    ACCOUNT_SELECTED.clear();
+    showToast(ids.length === 1 ? '邮箱换绑任务已开始' : `已开始 ${r.started_count || 0} 个换绑任务，跳过 ${(r.skipped || []).length} 个`);
+    planStatusRevision = '';
+    loadAccounts();
+    const poll = setInterval(loadAccounts, 5000);
+    setTimeout(() => clearInterval(poll), 10 * 60 * 1000);
+  } catch (e) { showToast('邮箱换绑失败: ' + e.message); }
+  finally { btn.disabled = false; }
+}
+$('#btnCloseEmailChangeV2').addEventListener('click', closeEmailChangeModal);
+$('#btnCancelEmailChangeV2').addEventListener('click', closeEmailChangeModal);
+$('#btnSubmitEmailChangeV2').addEventListener('click', submitEmailChange);
+$('#emailChangeModalV2').addEventListener('click', e => { if (e.target.id === 'emailChangeModalV2') closeEmailChangeModal(); });
 (function bindAccountsToolbarV2() {
   const bind = (id, fn) => {
     const el = document.getElementById(id);
@@ -4907,6 +5077,8 @@ async function copyCurrentPageLines() {
   bind('btnRetrySelectedCodexV2', retrySelectedCodex);
   bind('btnDownloadSelectedCpaV2', downloadSelectedCpa);
   bind('btnStopSelectedCodexV2', stopSelectedCodex);
+  bind('btnSetupSelectedTotpV2', setupSelectedTotp);
+  bind('btnChangeSelectedEmailsV2', () => openEmailChangeModal(Array.from(ACCOUNT_SELECTED)));
   bind('btnNoteSelectedAccountsV2', noteSelectedAccounts);
   bind('btnCopySelectedLinesV2', copySelectedAccountLines);
   bind('btnCopySelectedTokensV2', copySelectedAccountTokens);
@@ -4914,8 +5086,6 @@ async function copyCurrentPageLines() {
   bind('btnCopyAllTokensV2', copyCurrentPageTokens);
   bind('btnCopyAllLinesV2', copyCurrentPageLines);
   bind('btnDownloadSelectedTxtV2', downloadSelectedAccountTxt);
-  bind('btnImportSelectedChatgpt2ApiV2', importSelectedAccountsToChatgpt2Api);
-  bind('btnImportAllChatgpt2ApiV2', importAllAccountsToChatgpt2Api);
   bind('btnArchiveSelectedAccountsV2', archiveSelectedAccounts);
   bind('btnDeleteSelectedAccountsV2', deleteSelectedAccounts);
 })();
@@ -4929,6 +5099,7 @@ const POOL_SOURCE_LABELS = {
   all: '全部邮箱池',
   outlook: 'Outlook 邮箱池',
   generic_api: '通用 API 邮箱池',
+  imap: '通用 IMAP 邮箱池',
   cloudflare_domain: '域名邮箱池',
 };
 function setPoolSourceV2(val) {
@@ -4949,9 +5120,9 @@ function getOutlookQuery() {
   const el = document.getElementById('qOutlookV2');
   return (el ? el.value : '').trim();
 }
-function poolKey(r) { return `${r.source || getPoolSource() || 'outlook'}|${r.email || ''}`; }
+function poolKey(r) { return `${r.source || getPoolSource() || 'all'}|${r.email || ''}`; }
 function poolLabel(src) {
-  return ({outlook:'Outlook', generic_api:'通用API', cloudflare_domain:'域名邮箱'})[src] || src || '-';
+  return ({outlook:'Outlook', generic_api:'通用API', imap:'通用IMAP', cloudflare_domain:'域名邮箱'})[src] || src || '-';
 }
 async function loadOutlook() {
   try {
@@ -4993,7 +5164,7 @@ function _outlookTokenCell(r) {
   return `<span class="acc-v2-token-none">无Token</span>`;
 }
 function _outlookMoreMenu(r) {
-  const src = esc(r.source || 'outlook');
+  const src = esc(r.source || getPoolSource() || 'all');
   const email = esc(r.email);
   const items = [
     cbtn('复制Token', r.access_token, 'good'),
@@ -5010,7 +5181,7 @@ function renderOutlook() {
   const bodyV2 = $('#outlookBodyV2');
   if (!bodyV2) return;
   bodyV2.innerHTML = rows.map(r => {
-      const src = esc(r.source || 'outlook');
+      const src = esc(r.source || getPoolSource() || 'all');
       const email = esc(r.email);
       return `
     <tr>
@@ -5067,7 +5238,7 @@ function onPoolSourceChange(el) {
   PAGERS.outlook.page = 1;
   OUTLOOK_SELECTED.clear();
   const val = el ? el.value : getPoolSource();
-  if (val === 'outlook' || val === 'generic_api') setImportSourceV2(val);
+  if (val === 'outlook' || val === 'generic_api' || val === 'imap') setImportSourceV2(val);
   loadOutlook();
 }
 function syncOutlookSelectAll(checked) {
@@ -5110,7 +5281,11 @@ async function onOutlookBodyClick(e) {
   try {
     if (poolAct === 'delete') {
       if (!confirm(`确定从邮箱池删除 ${email}？此操作不可撤销。`)) return;
-      await api('/api/outlook/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, source}) });
+      const r = await api('/api/outlook/delete', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, source}) });
+      if (!r.deleted) {
+        showToast('删除失败：邮箱不存在或来源不匹配');
+        return;
+      }
       OUTLOOK_SELECTED.delete(`${source}|${email}`);
       showToast('已删除');
     } else {
@@ -5178,6 +5353,7 @@ async function onOutlookBodyClick(e) {
 const IMPORT_SOURCE_LABELS = {
   outlook: 'Outlook 邮箱池',
   generic_api: '通用 API 取码邮箱',
+  imap: '通用 IMAP 取码邮箱',
 };
 function setImportSourceV2(val) {
   const hidden = document.getElementById('importSourceV2');
@@ -5192,6 +5368,17 @@ function setImportSourceV2(val) {
       item.classList.toggle('is-active', item.dataset.value === next);
     });
   }
+  const imapSettings = document.getElementById('imapImportSettingsV2');
+  if (imapSettings) {
+    imapSettings.classList.toggle('hidden', next !== 'imap');
+    imapSettings.style.display = next === 'imap' ? 'grid' : 'none';
+  }
+  const text = document.getElementById('importTextV2');
+  if (text) text.placeholder = next === 'imap'
+    ? 'user@example.com----imapPassword\nuser2@example.com:imapPassword'
+    : next === 'generic_api'
+      ? 'email----取码地址'
+      : 'email----password----clientId----refreshToken';
 }
 function openOutlookImportModal() {
   const modal = $('#outlookImportModal');
@@ -5199,7 +5386,7 @@ function openOutlookImportModal() {
   const result = $('#importResultV2');
   if (result) result.innerHTML = '';
   const pool = getPoolSource();
-  if (pool === 'outlook' || pool === 'generic_api') setImportSourceV2(pool);
+  if (pool === 'outlook' || pool === 'generic_api' || pool === 'imap') setImportSourceV2(pool);
   else setImportSourceV2('outlook');
   modal.classList.remove('hidden');
   updateModalScrollLock();
@@ -5266,7 +5453,14 @@ async function doImportOutlook() {
   try {
     const source = sourceEl ? sourceEl.value : 'outlook';
     const as_registered = registeredEl ? !!registeredEl.checked : false;
-    const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text, source, as_registered}) });
+    const payload = {text, source, as_registered};
+    if (source === 'imap') {
+      payload.imap_server = ($('#imapServerV2')?.value || '').trim();
+      payload.imap_port = Number($('#imapPortV2')?.value || 993);
+      payload.imap_ssl = ($('#imapSslV2')?.value || 'true') === 'true';
+      if (!payload.imap_server) { showToast('请填写 IMAP 服务器'); return; }
+    }
+    const r = await api('/api/outlook/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
     const mode = r.as_registered ? '已注册账号' : '邮箱池素材';
     const msg = `按 ${mode} 导入：解析 ${r.parsed} 行，新增 ${r.inserted}，跳过 ${r.skipped}${r.as_registered ? '；可到“账号”页选择后批量补跑 Codex' : ''}`;
     if (resultEl) resultEl.innerHTML = `<div class="banner info">${esc(msg)}</div>`;
@@ -5741,7 +5935,9 @@ function emailConfigSectionForKey(key) {
   if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢临时邮箱 API 配置'];
   if (key.startsWith('MAILCX_')) return ['Mail.cx', 'Mail.cx 临时邮箱 API：随机地址与长轮询验证码'];
   if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
+  if (key.startsWith('REMAIL_')) return ['Remail', 'Remail 开放 API、项目下单和取件配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
+  if (key.startsWith('IMAP_')) return ['通用 IMAP', '通用 IMAP 邮箱池的收件目录配置'];
   if (key.startsWith('CLOUDFLARE_')) return ['Cloudflare 临时邮箱', 'Cloudflare Worker 临时邮箱 API、鉴权与路径配置'];
   if (['EMAIL_DOMAIN','QQ_EMAIL','QQ_IMAP_PASSWORD'].includes(key)) return ['Cloudflare 域名邮箱', 'Cloudflare 转发到 QQ 邮箱后的 IMAP 收信配置'];
   return ['其他邮箱配置', ''];
@@ -5844,7 +6040,6 @@ function configSectionIntro(name) {
   if (name === '网站配置') return '配置网站登录授权码与 Session 签名密钥。';
   if (name === '功能开关') return '';
   if (name === '注册方式') return '选择账号注册时使用的自动化方式。';
-  if (name === 'ChatGPT2API') return '分别配置旧版和新版反代，一键导入时按目标分发账号。';
   if (name === 'CloakBrowser') return '本地指纹浏览器运行参数、语言时区与代理设置。';
   if (name === 'Browser Use') return 'Browser Use Cloud 远端浏览器与代理参数。';
   if (name === 'Skyvern') return 'Skyvern Browser Sessions 与代理参数。';
@@ -5853,7 +6048,7 @@ function configSectionIntro(name) {
   if (name === '邮箱 / OTP') return '邮箱来源、OTP 等待与各邮箱服务商参数。';
   if (name === '接码平台') return '接码通道、国家代码与本地取号服务参数。';
   if (name === '人工节奏') return '注册流程中的随机停顿节奏。';
-  if (name === '浏览器画像') return '浏览器语言、时区与出口 IP 画像。';
+  if (name === '浏览器画像') return '浏览器语言、时区、出口 IP 画像与注册省流量设置。';
   if (name === '代理池') return '代理列表与套餐/Agent 网络模式。';
   if (name === '提链') return '提链服务地址、CDK 与并发参数。';
   return '';
@@ -6016,6 +6211,24 @@ function renderFeatureSwitchField(f, opts = {}) {
     </div>
   `;
 }
+function renderConfigExternalLink(f) {
+  const url = String(f.external_url || '').trim();
+  if (!/^https?:\/\//i.test(url)) return '';
+  const label = String(f.external_label || '打开官网');
+  return `<a class="config-external-link" href="${attrEsc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+}
+function renderConfigRecommendedLinks(f) {
+  const links = Array.isArray(f.recommended_links) ? f.recommended_links : [];
+  const items = links.map(item => {
+    const url = String(item?.url || '').trim();
+    if (!/^https?:\/\//i.test(url)) return '';
+    const label = String(item?.label || url);
+    const description = String(item?.description || '').trim();
+    return `<span class="config-recommendations-item"><a href="${attrEsc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>${description ? `：${esc(description)}` : ''}</span>`;
+  }).filter(Boolean).join('');
+  if (!items) return '';
+  return `<div class="config-recommendations" role="note"><span class="config-recommendations-title">推荐家宽</span>${items}</div>`;
+}
 function renderConfigPlainFieldV2(f) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   let control = '';
@@ -6031,13 +6244,17 @@ function renderConfigPlainFieldV2(f) {
     const ph = f.secret ? '保存在 .env，可留空' : '可留空';
     control = `<input type="${inputType}" data-key="${attrEsc(f.key)}" value="${attrEsc(shown)}" placeholder="${ph}" autocomplete="off" spellcheck="false">`;
   }
-  return `
+  const field = `
     <label class="fld">
       ${esc(f.label)}
       <span class="hint">${esc(f.help || '')}</span>
       ${control}
     </label>
   `;
+  const decorated = f.external_url
+    ? `<div class="config-field-wrap">${field}${renderConfigExternalLink(f)}</div>`
+    : field;
+  return decorated + renderConfigRecommendedLinks(f);
 }
 function renderMixedConfigSectionV2(name, fields, intro) {
   const slug = configGroupSlug(name);
@@ -6052,50 +6269,6 @@ function renderMixedConfigSectionV2(name, fields, intro) {
       ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
       <div class="config-section-v2-actions">
         <button type="button" class="btn primary" data-save-config-v2>保存</button>
-      </div>
-    </section>
-  `;
-}
-
-function chatgptPoolConfigField(fields, key, label = null) {
-  const field = fields.find(f => f.key === key);
-  return field ? renderConfigPlainFieldV2({...field, ...(label ? {label} : {})}) : '';
-}
-
-function renderChatgptPoolConfigSection(fields, intro) {
-  const slug = configGroupSlug('ChatGPT2API');
-  const targetKey = 'CHATGPT2API_IMPORT_TARGET';
-  const targetField = fields.find(f => f.key === targetKey);
-  const targetValue = String(targetField?.value || 'legacy').toLowerCase();
-  const targetChoices = [
-    {value: 'legacy', label: '旧版反代'},
-    {value: 'new', label: '新版反代'},
-    {value: 'both', label: '旧版 + 新版'},
-  ];
-  return `
-    <section class="config-section-v2" id="${esc(slug)}" data-config-section="ChatGPT2API">
-      ${renderConfigSectionHead('ChatGPT2API', intro || '')}
-      <div class="config-section-v2-body config-section-v2-body--single">
-        <label class="fld config-select-v2-field">
-          默认导入目标
-          <span class="hint">一键导入默认分发方式；账号页和任务页可临时选择目标</span>
-          <select data-key="${attrEsc(targetKey)}">
-            ${targetChoices.map(choice => `<option value="${choice.value}"${choice.value === targetValue ? ' selected' : ''}>${esc(choice.label)}</option>`).join('')}
-          </select>
-        </label>
-      </div>
-      <div class="config-section-v2-body" style="margin-top:16px;">
-        <div class="config-pool-subhead-v2">旧版（1.x）</div>
-        ${chatgptPoolConfigField(fields, 'CHATGPT2API_BASE_URL', '服务地址')}
-        ${chatgptPoolConfigField(fields, 'CHATGPT2API_AUTH_KEY', '管理员密钥')}
-        ${chatgptPoolConfigField(fields, 'CHATGPT2API_IMPORT_TIMEOUT', '导入超时(秒)')}
-        <div class="config-pool-subhead-v2">新版（3.x）</div>
-        ${chatgptPoolConfigField(fields, 'CHATGPT2API_NEW_BASE_URL', '服务地址')}
-        ${chatgptPoolConfigField(fields, 'CHATGPT2API_NEW_AUTH_KEY', '管理员密钥')}
-        ${chatgptPoolConfigField(fields, 'CHATGPT2API_NEW_IMPORT_TIMEOUT', '导入超时(秒)')}
-      </div>
-      <div class="config-section-v2-actions">
-        <button type="button" class="btn primary" data-save-config-v2>保存并探测版本</button>
       </div>
     </section>
   `;
@@ -6170,6 +6343,12 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
   const current = bySection[active] || { help: '', fields: [] };
   const switches = current.fields.filter(f => f.type === 'bool');
   const inputs = current.fields.filter(f => f.type !== 'bool');
+  const promo = name === '邮箱 / OTP' && active === 'Remail'
+    ? '<span class="remail-promo-notice" role="note">通过作者卡网购买积分9折优惠</span>'
+    : '';
+  const sectionHelp = current.help
+    ? `<p class="config-section-v2-subhelp">${esc(current.help)}${promo}</p>`
+    : promo;
   let extra = '';
   if (name === '邮箱 / OTP' && active === 'CloudMail') {
     extra = renderCloudMailTokenToolsV2();
@@ -6184,7 +6363,7 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
           </button>
         `).join('')}
       </div>
-      ${current.help ? `<p class="config-section-v2-subhelp">${esc(current.help)}</p>` : ''}
+      ${sectionHelp}
       ${switches.length ? `<div class="config-switches-v2">${switches.map(f => renderFeatureSwitchField(f, { withIcon: false })).join('')}</div>` : ''}
       ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
       ${extra}
@@ -6373,9 +6552,6 @@ function renderConfigSectionV2(name, fields) {
       </section>
     `;
   }
-  if (name === 'ChatGPT2API') {
-    return renderChatgptPoolConfigSection(fields, configSectionIntro(name));
-  }
   if (name === 'Codex') {
     return renderCodexSectionV2(fields);
   }
@@ -6384,7 +6560,7 @@ function renderConfigSectionV2(name, fields) {
       name,
       fields,
       emailConfigSectionForKey,
-      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'Mail.cx', 'CloudMail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
+      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'Mail.cx', 'CloudMail', 'Remail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
       { get: () => CONFIG_EMAIL_ACTIVE_SECTION_V2, set: v => { CONFIG_EMAIL_ACTIVE_SECTION_V2 = v; } },
       'email-section-v2'
     );
@@ -6420,7 +6596,6 @@ function renderConfigLayoutV2() {
   `).join('');
   sections.innerHTML = names.map(name => renderConfigSectionV2(name, groups[name] || [])).join('');
   renderRegistrationDriverCard();
-  syncChatgptImportTargets();
   const sectionMount = document.getElementById('configRegistrationSelectV2');
   if (sectionMount) renderRegistrationEpSelect(sectionMount, 'configRegistrationSelectV2');
   bindRoxyWorkspaceToolsV2();
@@ -6622,8 +6797,7 @@ async function saveConfigUpdates(triggerBtn) {
     const r = await api('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({updates}) });
     for (const [k, v] of Object.entries(updates)) { const f = CONFIG.find(x => x.key === k); if (f) f.value = v; delete CONFIG_PENDING_UPDATES[k]; }
     renderConfigLayoutV2();
-    const warnings = await probeChatgptTargetsAfterSave(Object.keys(updates));
-    showToast([r.reloaded ? '配置已生效' : '配置已保存（需重启）', ...warnings].filter(Boolean).join('；'));
+    showToast(r.reloaded ? '配置已生效' : '配置已保存（需重启）');
   } catch(e) { showToast('保存失败: ' + e.message); }
   finally { buttons.forEach(btn => { btn.disabled = false; }); }
 }
@@ -6640,17 +6814,8 @@ document.addEventListener('click', (e) => {
   copyText(copyStore.get(t.dataset.copyId));
 });
 
-// ---------- ChatGPT2API 导入目标 ----------
-document.addEventListener('change', (e) => {
-  const select = e.target.closest('[data-chatgpt-import-target]');
-  if (!select || !['legacy', 'new', 'both'].includes(select.value)) return;
-  localStorage.setItem('gpt_chatgpt2api_import_target', select.value);
-  document.querySelectorAll('[data-chatgpt-import-target]').forEach(item => { item.value = select.value; });
-});
-
 // ---------- 初始化 ----------
 loadSummary();
-syncChatgptImportTargets();
 activateTab(localStorage.getItem('gpt_console_active_tab') || 'register', false);
 jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidden')) refreshJobs(); }, 10000);
 setInterval(loadSummary, 30000);

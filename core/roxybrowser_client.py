@@ -122,6 +122,42 @@ def _project_id_value() -> str | int:
     return int(raw) if raw.isdigit() else raw
 
 
+def _apply_data_saver_open_args(params: dict) -> dict:
+    """在 Roxy 启动参数中尽早关闭图片加载，覆盖无扩展名图片 URL。
+
+    Network.setBlockedURLs 只能按 URL 后缀拦截，而 Roxy 浏览器在 Selenium 连接
+    前就已经启动；使用 Chromium 开关可以让图片在首个页面请求前就被禁用。该开关
+    只在用户明确开启省流量模式且包含 image 类型时追加。
+    """
+    try:
+        from config import browser as _browser_cfg
+
+        if not bool(getattr(_browser_cfg, "BROWSER_DATA_SAVER_MODE", False)):
+            return params
+        raw_types = getattr(_browser_cfg, "BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES", [])
+        if isinstance(raw_types, str):
+            types = {item.strip().lower() for item in raw_types.replace(",", "\n").splitlines() if item.strip()}
+        else:
+            types = {str(item or "").strip().lower() for item in (raw_types or []) if str(item or "").strip()}
+        if "image" not in types and "images" not in types and "img" not in types:
+            return params
+
+        current = params.get("args")
+        if isinstance(current, (list, tuple)):
+            args = list(current)
+        elif current:
+            args = [str(current)]
+        else:
+            args = []
+        switch = "--blink-settings=imagesEnabled=false"
+        if switch not in args:
+            args.append(switch)
+        params["args"] = args
+    except Exception as exc:
+        logger.debug("[Roxy] 添加省流量图片启动参数失败，继续使用原参数：%s", exc)
+    return params
+
+
 def _random_roxy_os() -> str:
     raw = str(getattr(_cfg, "ROXY_RANDOM_OS_CHOICES", "Windows,macOS") or "Windows,macOS")
     choices = [
@@ -475,6 +511,7 @@ class RoxyBrowserClient:
         params.setdefault("dirId", int(pid) if str(pid).isdigit() else pid)
         params.setdefault("args", [])
         params.setdefault("forceOpen", True)
+        _apply_data_saver_open_args(params)
         # ROXY_OPEN_HEADLESS 是显式开关，优先级应高于 ROXY_OPEN_EXTRA_PARAMS，
         # 否则 extra 里残留 headless=False 会导致 WebUI 保存无头后仍弹窗口。
         params["headless"] = bool(getattr(_cfg, "ROXY_OPEN_HEADLESS", False))

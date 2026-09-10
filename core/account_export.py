@@ -462,7 +462,28 @@ def save_account_data(
     返回新插入/更新的 row id。
     """
     from core.db import insert_account
-    extra = extra or {}
+    extra = dict(extra or {})
+    # Remail 的 service token 只存在进程内上下文中。注册成功后把订单上下文
+    # 一并保存到账号 extra_json，服务重启时查活即可恢复，不再依赖“同一进程
+    # 中先领取邮箱”。普通账号列表不会返回 extra_json。
+    if str(email_source or "").strip().lower() == "remail":
+        try:
+            from core.remail_client import get_account_context_metadata
+
+            remail_metadata = get_account_context_metadata(email)
+            if remail_metadata:
+                existing_service = extra.get("email_service")
+                merged_service = dict(existing_service) if isinstance(existing_service, dict) else {}
+                merged_service.update(remail_metadata)
+                extra["email_service"] = merged_service
+        except Exception as exc:
+            # 订单上下文保存失败不应让已经完成的注册失败；后续查活仍会
+            # 尝试用 API Key 按邮箱搜索 Remail 订单恢复凭证。
+            logger.warning(
+                "[Save] 保存 Remail 订单上下文失败，后续将尝试按邮箱恢复：%s: %s",
+                type(exc).__name__,
+                str(exc)[:180],
+            )
     user = extra.get("user") or {}
     account = extra.get("account") or {}
     # 从 extra.codex 抽出顶层 codex 状态/错误，方便 WebUI 直接读账号字段
