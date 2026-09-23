@@ -103,6 +103,13 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
                 browser.BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS,
             )
 
+    def test_browser_data_saver_defaults_block_chatgpt_rum(self):
+        with _browser_source_defaults():
+            self.assertIn(
+                "**://chatgpt.com/awe/api/v2/rum**",
+                browser.BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS,
+            )
+
     def test_browser_data_saver_defaults_do_not_block_chatgpt_core_bundles(self):
         with _browser_source_defaults():
             for prefix in (

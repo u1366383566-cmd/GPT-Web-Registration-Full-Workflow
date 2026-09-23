@@ -18,7 +18,7 @@ _LOADED = False
 
 # 这些多行列表字段允许用空值显式覆盖为 []。
 # 例如 WebUI 清空代理池后会写入 PROXY_POOL="" / PROXY_POOL="[]"，不能再回退到源码默认本地代理。
-EXPLICIT_EMPTY_LIST_ENV_KEYS = {"PROXY_POOL"}
+EXPLICIT_EMPTY_LIST_ENV_KEYS = {"PROXY_POOL", "PLAN_CHECK_PROXY"}
 
 # 统一管理：env key -> 说明（.env.example 用）
 SECRET_ENV_KEYS: dict[str, str] = {
@@ -28,6 +28,8 @@ SECRET_ENV_KEYS: dict[str, str] = {
     "SKYVERN_API_KEY": "Skyvern API Key",
     "ROXY_API_TOKEN": "RoxyBrowser 本地 API Token",
     "PLAN_CHECK_PROXY": "套餐查询专用代理（可能包含认证信息）",
+    "PLAN_CHECK_UPSTREAM_PROXY": "套餐查询本地上游代理地址（用于代理链）",
+    "PROXY_POOL_UPSTREAM_PROXY": "代理池本地上游代理地址（用于代理链）",
     "QQ_IMAP_PASSWORD": "QQ 邮箱 IMAP 授权码（不是 QQ 密码）",
     "GPTMAIL_API_KEY": "GPTMail API Key",
     "CLOUDFLARE_API_KEY": "Cloudflare Worker 临时邮箱 API Key / ADMIN_PASSWORD",
@@ -42,6 +44,7 @@ SECRET_ENV_KEYS: dict[str, str] = {
     "SUB2API_API_KEY": "sub2api 管理接口 API Key",
     "SUB2API_API_TOKEN": "sub2api 管理接口鉴权 Token（旧配置名，兼容）",
     "SMS_API_KEY": "接码平台 API Key（如 GrizzlySMS）",
+    "SMSBOWER_API_KEY": "SMSBower API Key",
     "L_ADMIN_AUTH_CODE": "本地 L 接码服务 ADMIN_AUTH_CODE",
     "H_ADMIN_AUTH_CODE": "本地 H 接码服务 ADMIN_AUTH_CODE",
 }

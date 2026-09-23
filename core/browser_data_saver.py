@@ -288,6 +288,28 @@ class BrowserDataSaver:
             logger.warning("[%s] 安装 Selenium 省流量拦截失败，继续不拦截：%s: %s", self.label, type(exc).__name__, exc)
         return self
 
+    def enable_post_auth_deep_mode(self, driver: Any) -> bool:
+        """注册完成后收紧规则，阻断不再需要的应用壳和遥测请求。"""
+        if not self.enabled or not bool(getattr(_cfg, "BROWSER_DATA_SAVER_DEEP_MODE", True)):
+            return False
+        patterns = [
+            "*://chatgpt.com/_next/*", "*://www.chatgpt.com/_next/*",
+            "*://chatgpt.com/cdn/assets/*", "*://www.chatgpt.com/cdn/assets/*",
+            "*://chatgpt.com/unauth-mweb/*", "*://www.chatgpt.com/unauth-mweb/*",
+            "*://oaistatic.com/*", "*://*.oaistatic.com/*",
+            "*://chatgpt.com/ces/*", "*://www.chatgpt.com/ces/*",
+            "*://auth.openai.com/awe/api/v2/rum*", "*://chatgpt.com/awe/api/v2/rum*",
+        ]
+        patterns = list(dict.fromkeys(self._selenium_patterns + patterns))
+        try:
+            driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": patterns})
+            self._selenium_patterns = patterns
+            logger.info("[%s] 已启用注册后深度省流量：应用壳/遥测规则=%s 条", self.label, len(patterns))
+            return True
+        except Exception as exc:
+            logger.warning("[%s] 注册后深度省流量安装失败，继续联网：%s", self.label, str(exc)[:180])
+            return False
+
     def observe_cdp_event(self, method: str, params: dict[str, Any], request: dict[str, Any] | None = None) -> bool:
         """让 Selenium 流量统计器识别 CDP inspector 拦截事件。
 

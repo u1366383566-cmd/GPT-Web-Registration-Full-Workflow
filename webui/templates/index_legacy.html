@@ -3297,7 +3297,13 @@ function renderConfigRecommendedLinks(f) {
     if (!/^https?:\/\//i.test(url)) return '';
     const label = String(item?.label || url);
     const description = String(item?.description || '').trim();
-    return `<span class="config-recommendations-item"><a href="${attrEsc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>${description ? `：${esc(description)}` : ''}</span>`;
+    const descriptionLinkUrl = String(item?.description_link_url || '').trim();
+    const descriptionLinkLabel = String(item?.description_link_label || '').trim();
+    const descriptionAfterLink = String(item?.description_after_link || '');
+    const descriptionHtml = description
+      ? `：${esc(description)}${/^https?:\/\//i.test(descriptionLinkUrl) && descriptionLinkLabel ? `<a href="${attrEsc(descriptionLinkUrl)}" target="_blank" rel="noopener noreferrer">${esc(descriptionLinkLabel)}</a>${esc(descriptionAfterLink)}` : ''}`
+      : '';
+    return `<span class="config-recommendations-item"><a href="${attrEsc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>${descriptionHtml}</span>`;
   }).filter(Boolean).join('');
   if (!items) return '';
   return `<div class="config-recommendations" role="note"><span class="config-recommendations-title">推荐家宽</span>${items}</div>`;
@@ -3328,10 +3334,11 @@ function emailConfigSectionForKey(key) {
 
 
 function smsConfigSectionForKey(key) {
-  if (['SMS_PROVIDER','SMS_COUNTRY','SMS_SERVICE','SMS_MAX_RETRIES','SMS_CODE_WAIT'].includes(key)) {
-    return ['通用接码', '接码通道选择、国家/服务代码、等待和重试参数；H 通道可复用 SMS_SERVICE/SMS_COUNTRY 作为 projectId/country'];
+  if (['SMS_PROVIDER','SMS_COUNTRY','SMS_SERVICE','SMS_MAX_PRICE','SMS_MAX_RETRIES','SMS_CODE_WAIT'].includes(key)) {
+    return ['通用接码', '接码通道选择、国家/服务代码、价格、等待和重试参数；SMSBower 的 OpenAI 服务代码为 dr，openai/chatgpt 会自动转换'];
   }
   if (key === 'SMS_API_KEY') return ['GrizzlySMS', 'GrizzlySMS 平台 API Key 配置'];
+  if (key.startsWith('SMSBOWER_')) return ['SMSBower', 'SMSBower handler_api、V2取号和供应商/价格筛选配置'];
   if (key.startsWith('H_')) return ['H 接码', 'H_API.md 本地 H 取号服务配置；项目ID/国家留空时复用通用字段'];
   if (key.startsWith('L_')) return ['L 接码', 'L_API.md 本地 L 取号服务配置'];
   return ['其他接码配置', ''];
@@ -3401,7 +3408,7 @@ function renderConfigFields(fields) {
       CONFIG_SMS_ACTIVE_SECTION,
       v => { CONFIG_SMS_ACTIVE_SECTION = v; },
       smsConfigSectionForKey,
-      ['通用接码', 'GrizzlySMS', 'H 接码', 'L 接码', '其他接码配置'],
+      ['通用接码', 'GrizzlySMS', 'SMSBower', 'H 接码', 'L 接码', '其他接码配置'],
       'sms-config-section'
     );
   }
@@ -3669,8 +3676,14 @@ function readConfigElementValue(el, f) {
   if (!f) return undefined;
   if (f.type === 'list_str_multiline') return el.value.split('\n').map(s=>s.trim()).filter(Boolean);
   if (f.type === 'bool') return el.value === 'true';
-  if (f.type === 'int') return parseInt(el.value || '0', 10);
-  if (f.type === 'float') return parseFloat(el.value || '0');
+  if (f.type === 'int') {
+    const value = parseInt(String(el.value || '').trim(), 10);
+    return Number.isFinite(value) ? value : Number(f.value || 0);
+  }
+  if (f.type === 'float') {
+    const value = parseFloat(String(el.value || '').trim());
+    return Number.isFinite(value) ? value : Number(f.value || 0);
+  }
   return isPlaceholderEmpty(el.value) ? '' : el.value.trim();
 }
 

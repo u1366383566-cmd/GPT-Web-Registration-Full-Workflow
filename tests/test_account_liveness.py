@@ -69,6 +69,7 @@ class AccountLivenessTests(unittest.TestCase):
     def test_preflight_preserves_explicit_direct_route_and_skips_providers(self):
         with patch.object(liveness, "BrowserSession", _DummyBrowserSession), \
              patch.object(liveness, "_warm_login_fingerprint_context"), \
+             patch.object(liveness, "probe_auth_session"), \
              patch.object(liveness, "get_csrf_token", return_value="csrf"), \
              patch.object(liveness, "signin_openai", return_value="https://auth.example/authorize"):
             session, authorize_url = liveness._network_preflight_with_retry(
@@ -77,12 +78,15 @@ class AccountLivenessTests(unittest.TestCase):
 
         self.assertEqual(session.proxy, "")
         self.assertEqual(authorize_url, "https://auth.example/authorize")
-        self.assertEqual(session.kwargs["fingerprint_seed"], "account:user@example.com")
+        self.assertTrue(
+            session.kwargs["fingerprint_seed"].startswith("live-check:user@example.com:")
+        )
 
-    def test_preflight_retries_with_new_session_when_csrf_is_blocked(self):
+    def test_preflight_retries_with_same_session_when_csrf_is_blocked(self):
         csrf_errors = [RuntimeError("HTTP Error 403"), "csrf"]
         with patch.object(liveness, "BrowserSession", _DummyBrowserSession), \
              patch.object(liveness, "_warm_login_fingerprint_context"), \
+             patch.object(liveness, "probe_auth_session"), \
              patch.object(liveness, "get_csrf_token", side_effect=csrf_errors), \
              patch.object(liveness, "signin_openai", return_value="authorize"), \
              patch.object(liveness.time, "sleep"):
@@ -91,13 +95,33 @@ class AccountLivenessTests(unittest.TestCase):
             )
 
         self.assertIs(_DummyBrowserSession.created[-1], session)
-        self.assertEqual(len(_DummyBrowserSession.created), 2)
-        self.assertTrue(_DummyBrowserSession.created[0].session.closed)
-        # None means each attempt may reselect a proxy from the configured pool.
+        # 403 下发的 CF Cookie 必须留在同一 Cookie Jar 中，不能每轮新建会话。
+        self.assertEqual(len(_DummyBrowserSession.created), 1)
+        self.assertFalse(_DummyBrowserSession.created[0].session.closed)
         self.assertIsNone(_DummyBrowserSession.created[0].received_proxy)
-        self.assertIsNone(_DummyBrowserSession.created[1].received_proxy)
 
-    def test_fingerprint_profile_is_pinned_when_route_changes(self):
+    def test_callback_403_retries_in_same_session_before_fetching_token(self):
+        session = _DummyBrowserSession(proxy="proxy")
+        with patch.object(
+            liveness,
+            "follow_oauth_callback",
+            side_effect=[RuntimeError("HTTP 403 from callback/openai"), "https://chatgpt.com/"],
+        ) as callback, patch.object(
+            liveness,
+            "fetch_session",
+            return_value={"accessToken": "token"},
+        ) as fetch, patch.object(liveness.time, "sleep"):
+            result = liveness._follow_continue_and_fetch(
+                session,
+                "https://auth.openai.com/authorize/continue?state=test",
+                referer="https://auth.openai.com/email-verification",
+            )
+
+        self.assertEqual(result["accessToken"], "token")
+        self.assertEqual(callback.call_count, 2)
+        fetch.assert_called_once_with(session)
+
+    def test_fingerprint_identity_is_pinned_when_session_is_recreated_in_one_attempt(self):
         state = {}
         first = MagicMock()
         first.browser_profile = {
@@ -129,6 +153,7 @@ class AccountLivenessTests(unittest.TestCase):
         self.assertEqual(second_kwargs["browser_profile"]["navigator_language"], "ja-JP")
         self.assertEqual(second_kwargs["browser_profile"]["timezone_iana"], "Asia/Tokyo")
         self.assertEqual(first_kwargs["fingerprint_seed"], second_kwargs["fingerprint_seed"])
+        self.assertTrue(str(first_kwargs["fingerprint_seed"]).startswith("live-check:user@example.com:"))
 
     def test_reauth_otp_dead_account_error_is_not_retried(self):
         response = SimpleNamespace(
@@ -167,6 +192,43 @@ class AccountLivenessTests(unittest.TestCase):
         reauth.assert_called_once()
         self.assertTrue(session.session.closed)
 
+    def test_reauth_403_falls_back_to_clean_full_web_login_on_same_route(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reauth_session = _DummyBrowserSession(proxy="socks5://proxy.example:1080")
+            full_session = _DummyBrowserSession(proxy="socks5://proxy.example:1080")
+            fresh_info = {
+                "accessToken": "new-token",
+                "user": {"id": "user-1"},
+                "account": {"planType": "free"},
+            }
+            state = {}
+            with patch.object(liveness, "_LOG_DIR", Path(tmp)), \
+                 patch.object(liveness, "_stored_access_token", return_value="old-token"), \
+                 patch.object(liveness, "_account_totp_secret", return_value=""), \
+                 patch.object(liveness, "_new_fingerprint_pinned_session", return_value=reauth_session), \
+                 patch.object(liveness, "_warm_authenticated_session"), \
+                 patch.object(liveness, "human_delay"), \
+                 patch.object(liveness, "_login_via_reauth", side_effect=RuntimeError("HTTP 403 callback")), \
+                 patch.object(liveness, "_login_via_full_web_flow", return_value=(
+                     full_session, fresh_info,
+                 )) as full_login:
+                result = liveness.check_account_liveness(
+                    "user@example.com",
+                    proxy=None,
+                    fingerprint_state=state,
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["access_token"], "new-token")
+        full_login.assert_called_once_with(
+            "user@example.com",
+            "socks5://proxy.example:1080",
+            email_source=None,
+            fingerprint_state=state,
+        )
+        self.assertTrue(reauth_session.session.closed)
+        self.assertTrue(full_session.session.closed)
+
     def test_service_403_fallback_really_uses_direct_connection(self):
         slot = _DummyQueueSlot()
         failed = {"ok": False, "status": "failed", "error": "HTTP Error 403: blocked"}
@@ -194,7 +256,7 @@ class AccountLivenessTests(unittest.TestCase):
         self.assertEqual(check.call_args_list[0].kwargs["email_source"], "remail")
         self.assertEqual(check.call_args_list[1].kwargs["proxy"], "")
         self.assertEqual(check.call_args_list[1].kwargs["email_source"], "remail")
-        self.assertIs(
+        self.assertIsNot(
             check.call_args_list[0].kwargs["fingerprint_state"],
             check.call_args_list[1].kwargs["fingerprint_state"],
         )

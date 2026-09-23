@@ -34,7 +34,7 @@ CHATGPT2API_IMPORT_TARGET = "legacy"
 
 # 注册成功并拿到 accessToken 后，在浏览器里随机停留一段时间再关闭连接。
 # 格式：最小秒,最大秒。设为 "0,0" 表示不额外停留。
-POST_REGISTER_DWELL_SECONDS_RANGE = "18,45"
+POST_REGISTER_DWELL_SECONDS_RANGE = "5,15"
 
 # ---- .env overrides for WebUI editable fields ----
 apply_env_overrides(globals(), {

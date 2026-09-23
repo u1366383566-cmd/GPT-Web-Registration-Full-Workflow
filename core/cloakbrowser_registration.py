@@ -173,7 +173,7 @@ def run_cloak_registration(
             access_token=access_token,
             totp_secret=totp_secret,
             email_source=resolve_email_source(email),
-            proxy_used=((opened.raw or {}).get("proxy") if opened else None) or proxy or None,
+            proxy_used=((opened.raw or {}).get("proxy_pool_target") if opened else None) or proxy or None,
             batch_dir=batch_dir,
             extra={
                 "user": session_info.get("user"),

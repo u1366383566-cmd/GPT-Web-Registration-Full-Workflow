@@ -8,11 +8,12 @@ import json
 import logging
 import socket
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import quote, urlparse
 
-from core.session import BrowserSession
+from core.session import BrowserSession, close_browser_session
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,15 @@ def _mask_proxy(proxy: str) -> str:
         return "***"
 
 
+def _proxy_lines(value: Any) -> list[str]:
+    """兼容 .env 多行代理和旧的单行代理值。"""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [line.strip() for line in str(value).splitlines() if line.strip()]
+
+
 def _local_proxy_status(proxy: str) -> tuple[bool, bool, str | None]:
     """检查回环代理端口；非本地代理不做预探测，避免额外网络请求。"""
     value = str(proxy or "").strip()
@@ -75,6 +85,18 @@ def _local_proxy_status(proxy: str) -> tuple[bool, bool, str | None]:
         return False, False, f"代理地址解析失败（{type(exc).__name__}）"
 
 
+def open_plan_check_proxy(route: dict, selected_proxy: str, *, timeout: float):
+    """返回实际请求代理；配置了上游时启动本地 HTTP CONNECT 中继。"""
+    selected_proxy = str(selected_proxy or "").strip()
+    upstream = str(route.get("upstream_proxy") or "").strip()
+    if selected_proxy and upstream:
+        from core.proxy_chain import ProxyChainRelay
+
+        relay = ProxyChainRelay(selected_proxy, upstream, timeout=timeout).start()
+        return relay.proxy_url, relay
+    return selected_proxy, None
+
+
 def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
     """解析套餐查询的实际网络路径。
 
@@ -87,6 +109,8 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "proxy_mode": "request",
             "network_route": "proxy" if selected else "direct",
             "proxy_used": _mask_proxy(selected) or None,
+            "upstream_proxy": "",
+            "upstream_proxy_used": None,
             "proxy_fallback_reason": None,
         }
 
@@ -101,12 +125,13 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "proxy_mode": mode,
             "network_route": "direct",
             "proxy_used": None,
+            "upstream_proxy": "",
+            "upstream_proxy_used": None,
             "proxy_fallback_reason": None,
         }
 
-    selected = str(getattr(proxy_cfg, "PLAN_CHECK_PROXY", "") or "").strip()
-    if not selected:
-        selected = str(proxy_cfg.pick_proxy() or "").strip()
+    candidates = _proxy_lines(getattr(proxy_cfg, "PLAN_CHECK_PROXY", ""))
+    selected = candidates[0] if candidates else str(proxy_cfg.pick_proxy() or "").strip()
     if not selected:
         if mode == "proxy":
             raise ValueError("套餐查询网络模式为 proxy，但未配置 PLAN_CHECK_PROXY 或 PROXY_POOL")
@@ -115,6 +140,8 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "proxy_mode": mode,
             "network_route": "direct",
             "proxy_used": None,
+            "upstream_proxy": "",
+            "upstream_proxy_used": None,
             "proxy_fallback_reason": "未配置套餐查询代理或代理池",
         }
 
@@ -125,12 +152,17 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
             "proxy_mode": mode,
             "network_route": "direct_fallback",
             "proxy_used": _mask_proxy(selected),
+            "upstream_proxy": "",
+            "upstream_proxy_used": None,
             "proxy_fallback_reason": reason,
         }
+    upstream = str(getattr(proxy_cfg, "PLAN_CHECK_UPSTREAM_PROXY", "") or "").strip()
     return {
         "proxy": selected,
+        "upstream_proxy": upstream,
+        "upstream_proxy_used": _mask_proxy(upstream) or None,
         "proxy_mode": mode,
-        "network_route": "proxy",
+        "network_route": "proxy_chain" if upstream else "proxy",
         "proxy_used": _mask_proxy(selected),
         "proxy_fallback_reason": None,
     }
@@ -172,20 +204,19 @@ def token_claims(token: str) -> dict:
     }
 
 
-def _common_headers(env: BrowserSession, token: str) -> dict[str, str]:
-    headers = env._get_common_headers()
+def _common_headers(env: BrowserSession, token: str, claims: dict | None = None) -> dict[str, str]:
+    """生成与 ChatGPT 登录态前端一致的套餐查询头。"""
+    headers = env.get_chatgpt_headers(referer="https://chatgpt.com/")
+    # GET 导航后的前端 fetch 不主动设置 content-type。
+    headers.pop("content-type", None)
     headers.update({
-        "accept": "*/*",
         "authorization": f"Bearer {normalize_token(token)}",
-        "oai-device-id": env.device_id,
-        "oai-language": env.navigator_language(),
-        "referer": "https://chatgpt.com/",
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
         "x-openai-target-path": ACCOUNTS_CHECK_PATH,
         "x-openai-target-route": ACCOUNTS_CHECK_PATH,
     })
+    account_id = str((claims or {}).get("account_id") or "").strip()
+    if account_id:
+        headers["chatgpt-account-id"] = account_id
     return headers
 
 
@@ -293,7 +324,35 @@ def _plan_check_settings(
 def _retryable_plan_error(http_status: int | None) -> bool:
     if http_status is None:
         return True
-    return http_status in {408, 409, 425, 429} or http_status >= 500
+    return http_status in {403, 408, 409, 425, 429} or http_status >= 500
+
+
+def _clear_plan_circuit(env: BrowserSession) -> None:
+    """清除可重试响应产生的本地熔断，同时保留 Cookie Jar。"""
+    reset = getattr(env, "reset_circuit_breaker", None)
+    if callable(reset):
+        reset()
+    else:
+        env.blocked_until = 0.0
+        env.blocked_reason = ""
+
+
+def _warm_plan_session(env: BrowserSession) -> None:
+    """先访问 ChatGPT document 建立同一会话的边缘 Cookie；失败不阻断正式查询。"""
+    try:
+        resp = env.get(
+            "https://chatgpt.com/",
+            headers=env.get_chatgpt_navigate_headers(
+                referer="https://chatgpt.com/", user_initiated=False,
+            ),
+            allow_redirects=True,
+        )
+        if int(getattr(resp, "status_code", 0) or 0) >= 400:
+            logger.info("[Plan] document 预热返回 HTTP %s，保留响应 Cookie 后继续", resp.status_code)
+    except Exception as exc:
+        logger.debug("[Plan] document 预热失败，继续正式查询：%s: %s", type(exc).__name__, str(exc)[:160])
+    finally:
+        _clear_plan_circuit(env)
 
 
 def _retry_wait_seconds(resp: Any, base_delay: float, attempt: int) -> float:
@@ -339,8 +398,7 @@ def check_account_plan(
             "error": f"套餐查询网络配置错误: {exc}",
             **{k: v for k, v in claims.items() if k != "payload"},
         }
-    route_meta = {k: v for k, v in route.items() if k != "proxy"}
-    url = f"https://chatgpt.com{ACCOUNTS_CHECK_PATH}?timezone_offset_min={quote(str(timezone_offset_min))}"
+    route_meta = {k: v for k, v in route.items() if k not in {"proxy", "upstream_proxy"}}
     try:
         timeout_seconds, attempts, base_delay = _plan_check_settings(timeout, max_attempts, retry_delay)
     except Exception as exc:
@@ -355,93 +413,142 @@ def check_account_plan(
         }
 
     last_result: dict | None = None
-    account_seed = f"account:{(claims.get('email') or claims.get('account_id') or normalize_token(token)[:32]).lower()}"
-    for attempt in range(1, attempts + 1):
-        env = None
-        resp = None
-        try:
-            # 套餐查询只需要稳定的请求头，不需要额外访问 IP 地理信息接口。
-            env = BrowserSession(proxy=route["proxy"], detect_exit_geo=False, fingerprint_seed=account_seed)
-            resp = env.session.get(
-                url,
-                headers=_common_headers(env, token),
-                allow_redirects=False,
-                timeout=timeout_seconds,
-            )
-            response_text = resp.text or ""
-            http_status = int(resp.status_code)
-            if not (200 <= http_status < 300):
-                is_auth_expired = http_status == 401
-                last_result = {
-                    "ok": False,
-                    "checked_at": now_iso(),
-                    "http_status": http_status,
-                    "error": "AT已过期/失效，请手动查活刷新" if is_auth_expired else f"HTTP {http_status}",
-                    "response_preview": response_text[:500],
-                    "retryable": _retryable_plan_error(http_status),
-                    "token_expired": True if is_auth_expired else claims.get("token_expired"),
-                    "needs_live_check": True if is_auth_expired else False,
-                }
-            else:
-                try:
-                    data: Any = resp.json()
-                except Exception:
-                    data = json.loads(response_text) if response_text.strip().startswith(("{", "[")) else None
-                if not isinstance(data, dict):
+    identity = str(
+        claims.get("email") or claims.get("account_id") or normalize_token(token)[:32]
+    ).lower()
+    # 任务级随机 seed：同一查询的所有重试统一 device/session/Cookie；不同账号
+    # 或下一次查询不会复用旧浏览器身份。
+    task_seed = f"plan-check:{identity}:{uuid.uuid4()}"
+    env: BrowserSession | None = None
+    relay = None
+    try:
+        # 首次按代理真实出口自动生成语言/时区画像，随后整条查询链固定不漂移。
+        effective_proxy, relay = open_plan_check_proxy(
+            route, route["proxy"], timeout=timeout_seconds,
+        )
+        env = BrowserSession(
+            proxy=effective_proxy, detect_exit_geo=True, fingerprint_seed=task_seed,
+        )
+        effective_tz = str(timezone_offset_min or "").strip()
+        if not effective_tz or effective_tz == "-":
+            effective_tz = str(env.js_timezone_offset_min())
+        url = (
+            f"https://chatgpt.com{ACCOUNTS_CHECK_PATH}"
+            f"?timezone_offset_min={quote(effective_tz)}"
+        )
+        logger.info(
+            "[Plan] 统一会话已创建：proxy=%s device_id=%s oai_session_id=%s %s",
+            route_meta.get("proxy_used") or route_meta.get("network_route") or "direct",
+            str(env.device_id)[:12] + "...",
+            str(env.oai_session_id)[:12] + "...",
+            env.fingerprint_summary_text(),
+        )
+        _warm_plan_session(env)
+
+        for attempt in range(1, attempts + 1):
+            resp = None
+            try:
+                resp = env.get(
+                    url,
+                    headers=_common_headers(env, token, claims),
+                    allow_redirects=False,
+                    timeout=timeout_seconds,
+                )
+                response_text = resp.text or ""
+                http_status = int(resp.status_code)
+                if not (200 <= http_status < 300):
+                    is_auth_expired = http_status == 401
                     last_result = {
                         "ok": False,
                         "checked_at": now_iso(),
                         "http_status": http_status,
-                        "error": "响应不是 JSON 对象",
+                        "error": "AT已过期/失效，请手动查活刷新" if is_auth_expired else f"HTTP {http_status}",
                         "response_preview": response_text[:500],
-                        "retryable": True,
+                        "retryable": _retryable_plan_error(http_status),
+                        "token_expired": True if is_auth_expired else claims.get("token_expired"),
+                        "needs_live_check": True if is_auth_expired else False,
                     }
                 else:
-                    parsed = parse_accounts_check(data, token=token)
-                    parsed["http_status"] = http_status
-                    parsed["attempt_count"] = attempt
-                    parsed["max_attempts"] = attempts
-                    parsed["request_timeout"] = timeout_seconds
-                    parsed["retryable"] = False
-                    parsed.update(route_meta)
-                    return parsed
-        except Exception as exc:
-            logger.debug("套餐查询失败: %s: %s", type(exc).__name__, exc, exc_info=True)
-            last_result = {
-                "ok": False,
-                "checked_at": now_iso(),
-                "http_status": int(resp.status_code) if resp is not None and getattr(resp, "status_code", None) else None,
-                "error": f"{type(exc).__name__}: {exc}",
-                "retryable": True,
-            }
-        finally:
-            if env is not None:
-                try:
-                    env.session.close()
-                except Exception:
-                    pass
+                    try:
+                        data: Any = resp.json()
+                    except Exception:
+                        data = json.loads(response_text) if response_text.strip().startswith(("{", "[")) else None
+                    if not isinstance(data, dict):
+                        last_result = {
+                            "ok": False,
+                            "checked_at": now_iso(),
+                            "http_status": http_status,
+                            "error": "响应不是 JSON 对象",
+                            "response_preview": response_text[:500],
+                            "retryable": True,
+                        }
+                    else:
+                        parsed = parse_accounts_check(data, token=token)
+                        parsed["http_status"] = http_status
+                        parsed["attempt_count"] = attempt
+                        parsed["max_attempts"] = attempts
+                        parsed["request_timeout"] = timeout_seconds
+                        parsed["retryable"] = False
+                        parsed["timezone_offset_min"] = effective_tz
+                        parsed.update(route_meta)
+                        return parsed
+            except Exception as exc:
+                logger.debug("套餐查询失败: %s: %s", type(exc).__name__, exc, exc_info=True)
+                last_result = {
+                    "ok": False,
+                    "checked_at": now_iso(),
+                    "http_status": int(resp.status_code) if resp is not None and getattr(resp, "status_code", None) else None,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "retryable": True,
+                }
 
-        last_result = last_result or {"ok": False, "checked_at": now_iso(), "error": "未知错误", "retryable": True}
-        last_result.update({
-            "attempt_count": attempt,
+            last_result = last_result or {"ok": False, "checked_at": now_iso(), "error": "未知错误", "retryable": True}
+            last_result.update({
+                "attempt_count": attempt,
+                "max_attempts": attempts,
+                "request_timeout": timeout_seconds,
+                "timezone_offset_min": effective_tz,
+                **route_meta,
+                **{k: v for k, v in claims.items() if k != "payload"},
+            })
+            if not last_result.get("retryable") or attempt >= attempts:
+                return last_result
+
+            # 403/429 会打开 BrowserSession 熔断。保留服务端刚下发的 CF Cookie，
+            # 只清除本地熔断并在同一会话内退避重试。
+            _clear_plan_circuit(env)
+            wait_seconds = _retry_wait_seconds(resp, base_delay, attempt)
+            logger.warning(
+                "套餐查询临时失败，第 %s/%s 次，保留 session/deviceId/CF Cookie，%.1fs 后重试: %s",
+                attempt,
+                attempts,
+                wait_seconds,
+                last_result.get("error"),
+            )
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+    except Exception as exc:
+        logger.debug("套餐查询会话初始化失败: %s: %s", type(exc).__name__, exc, exc_info=True)
+        return {
+            "ok": False,
+            "checked_at": now_iso(),
+            "http_status": None,
+            "error": f"{type(exc).__name__}: {exc}",
+            "retryable": True,
+            "attempt_count": 0,
             "max_attempts": attempts,
             "request_timeout": timeout_seconds,
             **route_meta,
             **{k: v for k, v in claims.items() if k != "payload"},
-        })
-        if not last_result.get("retryable") or attempt >= attempts:
-            return last_result
-
-        wait_seconds = _retry_wait_seconds(resp, base_delay, attempt)
-        logger.warning(
-            "套餐查询临时失败，第 %s/%s 次，%.1fs 后重试: %s",
-            attempt,
-            attempts,
-            wait_seconds,
-            last_result.get("error"),
-        )
-        if wait_seconds > 0:
-            time.sleep(wait_seconds)
+        }
+    finally:
+        if env is not None:
+            try:
+                close_browser_session(env)
+            except Exception:
+                pass
+        if relay is not None:
+            relay.close()
 
     return last_result or {
         "ok": False,

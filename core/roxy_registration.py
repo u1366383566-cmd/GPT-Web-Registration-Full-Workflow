@@ -15,6 +15,7 @@ from config import twofa as _twofa_cfg
 from core.account_export import save_account_data, post_register_dwell
 from core.browser_data_saver import BrowserDataSaver
 from core.browser_traffic import SeleniumTrafficTracker
+from core.roxy_asset_cache import RoxyLocalAssetCache
 from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
@@ -374,6 +375,33 @@ def _page_warmup(driver, *, reason: str = "") -> None:
         pass
 
 
+_MISSING_PAGE_ELEMENT_REFRESH_RETRIES = 3
+
+
+def _refresh_after_missing_page_element(driver, step: str, retry_index: int) -> bool:
+    """元素缺失时刷新当前页面，避免把页面迟渲染误判成流程失败。"""
+    max_retries = _MISSING_PAGE_ELEMENT_REFRESH_RETRIES
+    if retry_index >= max_retries:
+        return False
+    try:
+        current_url = str(getattr(driver, "current_url", "") or "")
+        logger.warning(
+            "%s %s未找到，刷新页面重试（第 %s/%s 次）：url=%s",
+            _log_prefix(driver), step, retry_index + 1, max_retries, current_url[:180],
+        )
+        driver.refresh()
+        time.sleep(1.5)
+        _page_warmup(driver, reason=f"missing_{step}")
+        return True
+    except Exception as exc:
+        logger.warning(
+            "%s %s缺失后的页面刷新失败（第 %s/%s 次）：%s: %s",
+            _log_prefix(driver), step, retry_index + 1, max_retries,
+            type(exc).__name__, str(exc)[:180],
+        )
+        return False
+
+
 def _find_any(driver, selectors: list[str], timeout: int | None = None):
     from selenium.webdriver.common.by import By
 
@@ -533,21 +561,28 @@ def _click_email_entry_option(driver) -> bool:
 
 def _wait_for_email_input(driver, timeout: int | None = None):
     """进入邮箱登录/注册方式并返回已找到的可见邮箱输入框。"""
-    end = time.time() + (timeout or int(_cfg.ROXY_SELENIUM_TIMEOUT))
+    wait_timeout = timeout or int(_cfg.ROXY_SELENIUM_TIMEOUT)
     last_state = None
-    clicked_email_option = False
-    while time.time() < end:
-        el = _find_visible_email_input_js(driver)
-        if el:
-            return el
-        last_state = _email_entry_state(driver)
-        if not clicked_email_option and _click_email_entry_option(driver):
-            clicked_email_option = True
-            time.sleep(1.0)
-            _assert_not_external_idp(driver, "点击邮箱入口后")
-            continue
-        time.sleep(0.4)
-    raise RuntimeError(f"找不到邮箱输入框/邮箱入口（未使用文字识别），state={last_state}")
+    for refresh_retry in range(_MISSING_PAGE_ELEMENT_REFRESH_RETRIES + 1):
+        end = time.time() + wait_timeout
+        clicked_email_option = False
+        while time.time() < end:
+            el = _find_visible_email_input_js(driver)
+            if el:
+                return el
+            last_state = _email_entry_state(driver)
+            if not clicked_email_option and _click_email_entry_option(driver):
+                clicked_email_option = True
+                time.sleep(1.0)
+                _assert_not_external_idp(driver, "点击邮箱入口后")
+                continue
+            time.sleep(0.4)
+        if not _refresh_after_missing_page_element(driver, "邮箱输入框/邮箱入口", refresh_retry):
+            break
+    raise RuntimeError(
+        f"找不到邮箱输入框/邮箱入口，已刷新重试{_MISSING_PAGE_ELEMENT_REFRESH_RETRIES}次"
+        f"（未使用文字识别），state={last_state}"
+    )
 
 
 def _type_email_address(driver, email: str, timeout: int | None = None) -> None:
@@ -1071,9 +1106,7 @@ def _submit_email_and_wait_next(
 def _type_otp(driver, code: str, *, attempts: int = 4, retry_delay: float = 1.5) -> None:
     from selenium.webdriver.common.by import By
 
-    last_state: dict = {}
-    # 页面过渡渲染时输入框可能短暂不可见，轮询重试而不是立刻失败。
-    for attempt in range(1, max(1, attempts) + 1):
+    for refresh_retry in range(_MISSING_PAGE_ELEMENT_REFRESH_RETRIES + 1):
         # 单输入框
         for selector in [
             "input[autocomplete='one-time-code']",
@@ -1103,15 +1136,12 @@ def _type_otp(driver, code: str, *, attempts: int = 4, retry_delay: float = 1.5)
                     human_delay("keystroke")
             return
 
-        last_state = _email_otp_page_state(driver)
-        if attempt < attempts:
-            logger.warning(
-                "[OTP] 第 %s/%s 次未找到验证码输入框，%.1fs 后重试；页面状态: %s",
-                attempt, attempts, retry_delay, str(last_state)[:220],
-            )
-            time.sleep(retry_delay)
+        if not _refresh_after_missing_page_element(driver, "OTP输入框", refresh_retry):
+            break
 
-    raise RuntimeError(f"找不到 OTP 输入框: last={last_state}")
+    raise RuntimeError(
+        f"找不到 OTP 输入框，已刷新重试{_MISSING_PAGE_ELEMENT_REFRESH_RETRIES}次"
+    )
 
 
 def _email_otp_page_state(driver) -> dict:
@@ -1702,7 +1732,8 @@ def _click_continue_with_password_if_present(driver) -> dict:
           && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
         const enabled = el => !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true';
         const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
-        const candidates = [...document.querySelectorAll('a,button,[role="link"],[role="button"]')].filter(el => visible(el) && enabled(el));
+        const candidates = [...document.querySelectorAll('a,button,input[type="button"],input[type="submit"],[role="link"],[role="button"],[data-login-web-auth-control],[data-dd-action-name]')]
+          .filter(el => visible(el) && enabled(el));
         const isPasswordCreate = el => {
           const href = String(el.getAttribute('href') || '').toLowerCase();
           const attrs = [
@@ -1710,13 +1741,13 @@ def _click_continue_with_password_if_present(driver) -> dict:
             el.getAttribute('data-testid'), el.getAttribute('data-login-web-auth-control'),
             el.getAttribute('data-dd-action-name'), el.className, el.textContent
           ].join(' ').toLowerCase();
-          const text = norm(el.textContent || '');
+          const text = norm(el.innerText || el.textContent || '');
+          const passwordContinue = /continuewithpassword|continuewithapassword|usepasswordtocontinue|continueusingpassword/.test(text)
+            || /密码.*继续|密碼.*繼續|비밀번호.*계속|パスワード.*続行|パスワード.*つづける/.test(text);
           return (
             href.includes('/create-account/password') ||
             attrs.includes('/create-account/password') ||
-            attrs.includes("data-dd-action-name") ||
-            text.includes('continuewithpassword') ||
-            text.includes('continuewithapassword')
+            passwordContinue
           );
         };
         const btn = candidates.find(isPasswordCreate);
@@ -1742,28 +1773,32 @@ def _click_continue_with_password_if_present(driver) -> dict:
 def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str | None:
     """邮箱提交后兼容 create-account/password。返回本次设置的 OpenAI 账号密码；未遇到密码页返回 None。"""
     end = time.time() + timeout
+    verification_wait_end = min(end, time.time() + 10)
     last = {}
-    clicked_password_switch = False
+    missing_element_refreshes = 0
     while time.time() < end:
         if _is_email_verification_page(driver):
-            result = _click_continue_with_password_if_present(driver)
-            if result.get("ok"):
-                logger.info("%s 邮箱验证码页已点击“使用密码继续”：email=%s detail=%s", _log_prefix(driver), email, result)
-                clicked_password_switch = True
-                time.sleep(0.8)
-                continue
-            if clicked_password_switch and result.get("reason") == "missing_continue_with_password":
-                # 刚点击成功后按钮消失 = 页面正在跳转密码页；SPA 跳转常超 0.8s，
-                # 等页面真正离开验证码页再回到主循环处理密码，而不是放弃进入 OTP 阶段。
-                nav_end = time.time() + 10
-                while time.time() < nav_end:
-                    if not _is_email_verification_page(driver):
-                        break
-                    time.sleep(0.4)
-                if not _is_email_verification_page(driver):
+            result = {}
+            for _ in range(8):
+                result = _click_continue_with_password_if_present(driver)
+                if result.get("ok"):
+                    logger.info("%s 邮箱验证码页已点击“使用密码继续”：email=%s detail=%s", _log_prefix(driver), email, result)
+                    time.sleep(0.8)
+                    break
+                time.sleep(0.5)
+            else:
+                if time.time() < verification_wait_end:
+                    logger.info("%s 邮箱验证码页暂未找到“使用密码继续”，继续等待页面渲染：detail=%s", _log_prefix(driver), result)
+                    time.sleep(0.5)
                     continue
-            logger.info("%s 已在邮箱验证码页，但未找到“使用密码继续”按钮：detail=%s", _log_prefix(driver), result)
-            return None
+                if _refresh_after_missing_page_element(driver, "使用密码继续按钮", missing_element_refreshes):
+                    missing_element_refreshes += 1
+                    end = time.time() + timeout
+                    verification_wait_end = min(end, time.time() + 10)
+                    continue
+                logger.info("%s 已在邮箱验证码页，但未找到“使用密码继续”按钮：detail=%s", _log_prefix(driver), result)
+                return None
+            continue
         if _has_access_token(driver):
             return None
         last = _password_page_state(driver)
@@ -1814,6 +1849,13 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
         return {ok:true, reason:'password_targets', input, button: buttons[0].el};
         """) or {}
         if not result.get('ok'):
+            reason = str(result.get('reason') or '')
+            if reason in {'missing_password_input', 'missing_submit'} and _refresh_after_missing_page_element(
+                driver, "密码输入框/提交按钮", missing_element_refreshes
+            ):
+                missing_element_refreshes += 1
+                end = time.time() + timeout
+                continue
             raise RuntimeError(f"密码页处理失败：{result} state={last}")
         _human_type_text(driver, result.get("input"), password, clear=True)
         # React/Auth0 会在 input/change 后异步校验密码强度并启用 Continue。
@@ -1858,6 +1900,13 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
         };
         """) or {}
         if not submit_result.get("ok") or not submit_result.get("button"):
+            reason = str(submit_result.get('reason') or '')
+            if reason == 'missing_enabled_submit' and _refresh_after_missing_page_element(
+                driver, "密码页 Continue 按钮", missing_element_refreshes
+            ):
+                missing_element_refreshes += 1
+                end = time.time() + timeout
+                continue
             raise RuntimeError(f"密码页找不到可点击的 Continue 按钮：{submit_result} state={_password_page_state(driver)}")
         _human_click(driver, submit_result.get("button"), label="password_submit")
         logger.info("%s 已填写并点击密码页 Continue：detail=%s", _log_prefix(driver), {k: v for k, v in submit_result.items() if k != "button"})
@@ -2168,7 +2217,36 @@ def run_roxy_registration(
     openai_password: str | None = None
     traffic_tracker: SeleniumTrafficTracker | None = None
     data_saver: BrowserDataSaver | None = None
+    asset_cache: RoxyLocalAssetCache | None = None
+    asset_cache_snapshot: dict | None = None
     network_traffic: dict | None = None
+
+    def _merge_proxy_transport_traffic() -> None:
+        """用代理链全量计数补正仅覆盖当前页面 target 的 CDP 统计。"""
+        nonlocal network_traffic
+        transport = client.proxy_transport_snapshot()
+        if not transport or not transport.get("available"):
+            return
+        if not isinstance(network_traffic, dict):
+            network_traffic = {}
+        browser_total = int(network_traffic.get("total_bytes") or 0)
+        transport_total = int(transport.get("total_bytes") or 0)
+        network_traffic["browser_observed_upload_bytes"] = int(network_traffic.get("upload_bytes") or 0)
+        network_traffic["browser_observed_download_bytes"] = int(network_traffic.get("download_bytes") or 0)
+        network_traffic["browser_observed_total_bytes"] = browser_total
+        network_traffic["proxy_transport"] = dict(transport)
+        network_traffic["upload_bytes"] = int(transport.get("upload_bytes") or 0)
+        network_traffic["download_bytes"] = int(transport.get("download_bytes") or 0)
+        network_traffic["total_bytes"] = transport_total
+        network_traffic["measurement_scope"] = "proxy_chain_all_roxy_targets"
+        if browser_total > 0 and transport_total > browser_total * 1.2:
+            logger.warning(
+                "[Roxy] CDP 当前页面统计 %.2f MiB，代理链全浏览器实际 %.2f MiB（%.2fx）；"
+                "差额来自启动阶段、扩展/Service Worker 或其他 target",
+                browser_total / 1024 / 1024,
+                transport_total / 1024 / 1024,
+                transport_total / browser_total,
+            )
 
     def _traffic_checkpoint() -> None:
         if traffic_tracker is not None:
@@ -2180,6 +2258,10 @@ def run_roxy_registration(
     try:
         driver = _build_driver(opened)
         try:
+            asset_cache = RoxyLocalAssetCache(opened.debugger_address, label="Roxy").start()
+        except Exception as exc:
+            logger.warning("[Roxy注册] 初始化本地静态资源缓存失败，继续联网加载：%s: %s", type(exc).__name__, str(exc)[:180])
+        try:
             traffic_tracker = SeleniumTrafficTracker(driver, label="Roxy")
         except Exception as exc:
             # 统计失败不应影响注册主流程。
@@ -2187,6 +2269,7 @@ def run_roxy_registration(
         data_saver = BrowserDataSaver(label="Roxy")
         if traffic_tracker is not None:
             traffic_tracker.attach_data_saver(data_saver)
+            traffic_tracker.attach_local_asset_cache(asset_cache)
         data_saver.install_selenium(driver)
         _center_browser_window(driver)
         driver.set_page_load_timeout(int(_cfg.ROXY_SELENIUM_TIMEOUT))
@@ -2316,6 +2399,20 @@ def run_roxy_registration(
         access_token = session_info["accessToken"]
         logger.info("[Roxy注册] 已拿到 accessToken：%s", email)
         _check_manual_stop()
+        # 已拿到 accessToken 后不再需要 ChatGPT 应用壳；Codex 复用当前窗口时保留完整页面。
+        try:
+            from config import codex as _codex_deep_cfg
+            if not bool(getattr(_codex_deep_cfg, "ENABLE_CODEX_AUTO", False)) and data_saver is not None:
+                data_saver.enable_post_auth_deep_mode(driver)
+                # 不需要 Codex 时切到本地空白页，停止 ChatGPT SPA 的轮询、遥测
+                # 和懒加载资源；accessToken 已经在上一步落盘所需数据中取得。
+                try:
+                    driver.get("about:blank")
+                    logger.info("[Roxy注册] 已切换 about:blank，停止注册后的页面后台流量")
+                except Exception as blank_exc:
+                    logger.debug("[Roxy注册] 切换空白页失败，保留深度拦截：%s", blank_exc)
+        except Exception as exc:
+            logger.debug("[Roxy注册] 深度省流量阶段跳过：%s", exc)
 
         if _twofa_cfg.ENABLE_2FA:
             logger.warning("[Roxy注册] 当前 Roxy 自动化路径暂不执行 2FA 设置，已跳过")
@@ -2351,8 +2448,15 @@ def run_roxy_registration(
         # 统计注册浏览器关闭前的完整会话；注册后停留期间的网络请求也计入。
         post_register_dwell(email, label="Roxy注册")
         _traffic_checkpoint()
+        if asset_cache is not None:
+            asset_cache_snapshot = asset_cache.stop()
         if traffic_tracker is not None:
             network_traffic = traffic_tracker.stop()
+        if asset_cache_snapshot is not None:
+            if not isinstance(network_traffic, dict):
+                network_traffic = {}
+            network_traffic["local_asset_cache"] = asset_cache_snapshot
+        _merge_proxy_transport_traffic()
         if data_saver is not None:
             data_saver.stop()
         account_id = save_account_data(
@@ -2360,7 +2464,7 @@ def run_roxy_registration(
             access_token=access_token,
             totp_secret=totp_secret,
             email_source=resolve_email_source(email),
-            proxy_used=proxy or None,
+            proxy_used=((opened.raw or {}).get("proxy_pool_target") if opened else None) or proxy or None,
             batch_dir=batch_dir,
             extra={
                 "user": session_info.get("user"),
@@ -2384,11 +2488,17 @@ def run_roxy_registration(
             "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}",
         }
     except Exception as exc:
+        if asset_cache is not None and asset_cache_snapshot is None:
+            try:
+                asset_cache_snapshot = asset_cache.stop()
+            except Exception:
+                pass
         if traffic_tracker is not None:
             try:
                 network_traffic = traffic_tracker.stop()
             except Exception:
                 pass
+        _merge_proxy_transport_traffic()
         if data_saver is not None:
             data_saver.stop()
         logger.error("[Roxy注册] 失败：%s: %s", type(exc).__name__, exc)
@@ -2407,6 +2517,11 @@ def run_roxy_registration(
             "error": f"{type(exc).__name__}: {str(exc)[:300]}",
         }
     finally:
+        if asset_cache is not None:
+            try:
+                asset_cache.stop()
+            except Exception:
+                pass
         if traffic_tracker is not None:
             try:
                 traffic_tracker.stop()

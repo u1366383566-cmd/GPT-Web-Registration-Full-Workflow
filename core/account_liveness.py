@@ -4,14 +4,15 @@ import logging
 import json
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
 from core import db
-from core.session import BrowserSession
+from core.session import BrowserSession, close_browser_session
 from core.codex_oauth import _account_registration_password, _account_totp_secret, _account_totp_code
 from core.humanize import delay as human_delay
-from core.chatgpt_auth import get_csrf_token, get_providers, signin_openai
+from core.chatgpt_auth import get_csrf_token, get_providers, probe_auth_session, signin_openai
 from core.openai_auth import (
     follow_authorize,
     send_email_otp,
@@ -21,8 +22,8 @@ from core.openai_auth import (
     detect_account_unusable_text,
 )
 from core.account_export import (
-    _follow_reauth,
-    _trigger_reauth,
+    _follow_reauth_with_retry,
+    _trigger_reauth_with_retry,
     _validate_reauth_otp,
     fetch_session,
     follow_oauth_callback,
@@ -67,18 +68,31 @@ def _new_fingerprint_pinned_session(
     proxy: str | None,
     fingerprint_state: dict | None = None,
 ) -> BrowserSession:
-    """创建账号会话；同一查活任务内固定完整浏览器画像，不随出口切换漂移。"""
+    """创建任务独占账号会话；同一路由尝试内固定完整身份与浏览器画像。"""
     state = fingerprint_state if fingerprint_state is not None else {}
     saved_profile = state.get("browser_profile")
     identity = str(email).strip().lower()
+    # 每个查活任务生成一次独立 seed；同一任务内所有阶段/重试复用，下一任务及
+    # 其他账号均不会继承该组 device/session/sentinel 标识。
+    fingerprint_seed = str(state.get("fingerprint_seed") or "").strip()
+    if not fingerprint_seed:
+        fingerprint_seed = f"live-check:{identity}:{uuid.uuid4()}"
+        state["fingerprint_seed"] = fingerprint_seed
     session = BrowserSession(
         proxy=proxy,
-        # 首次需要按出口生成地区画像；之后直接复用，不再因重试/直连兜底
-        # 把 ja-JP/Asia-Tokyo 突然改成 zh-CN/Asia-Shanghai。
+        # 首次按当前出口生成地区画像；同一路由内部如需重建则原样复用。
         detect_exit_geo=not bool(saved_profile),
         browser_profile=dict(saved_profile) if isinstance(saved_profile, dict) else None,
-        fingerprint_seed=f"account:{identity}",
+        fingerprint_seed=fingerprint_seed,
+        device_id=state.get("device_id"),
+        auth_session_logging_id=state.get("auth_session_logging_id"),
+        oai_session_id=state.get("oai_session_id"),
+        sentinel_sid=state.get("sentinel_sid"),
     )
+    for key in (
+        "device_id", "auth_session_logging_id", "oai_session_id", "sentinel_sid",
+    ):
+        state.setdefault(key, str(getattr(session, key, "") or ""))
     if not saved_profile:
         generated_profile = getattr(session, "browser_profile", None)
         if isinstance(generated_profile, dict):
@@ -87,28 +101,32 @@ def _new_fingerprint_pinned_session(
 
 
 def _warm_login_fingerprint_context(session: BrowserSession) -> None:
-    """按真实 Web 顺序建立首页 Cookie、匿名 bootstrap 和 NextAuth 上下文。"""
+    """复现 plus 纯协议注册成功样本的登录页初始化顺序。"""
     from core.chatgpt_bootstrap import anonymous_bootstrap
 
-    logger.info("[查活] 登录前指纹预热：document → anonymous bootstrap → providers")
+    logger.info(
+        "[查活] 登录链预热：/auth/login 顶层导航 → anonymous bootstrap → "
+        "providers → session → CSRF → session"
+    )
     nav = session.get(
-        "https://chatgpt.com/",
+        "https://chatgpt.com/auth/login",
         headers=session.get_chatgpt_navigate_headers(
-            referer="https://chatgpt.com/", user_initiated=False,
+            # 地址栏级顶层导航：无 Referer，Sec-Fetch-Site=none。
+            referer="", user_initiated=True,
         ),
         allow_redirects=True,
+        # 代理端口可连接不代表其上游 TLS 可用，避免坏节点长期占住 worker。
+        timeout=12,
     )
     nav.raise_for_status()
+    observe = getattr(session, "observe_chatgpt_document", None)
+    if callable(observe):
+        observe(nav)
     anonymous_bootstrap(session, strict=False)
-    # best-effort bootstrap 中某个非关键接口可能 403 并触发本地熔断；在进入
-    # NextAuth 正式链路前清理，但首页 document 的错误已经在上面硬失败。
+    # best-effort bootstrap 的非关键接口不能阻断正式认证链。
     _clear_optional_bootstrap_circuit(session)
-    try:
-        get_providers(session)
-    except Exception as exc:
-        logger.info("[查活] providers 预热未通过，继续 CSRF 正式链路：%s", str(exc)[:180])
-    finally:
-        _clear_optional_bootstrap_circuit(session)
+    get_providers(session)
+    probe_auth_session(session)
 
 
 def _network_preflight_with_retry(
@@ -117,7 +135,7 @@ def _network_preflight_with_retry(
     max_attempts: int = 4,
     fingerprint_state: dict | None = None,
 ) -> tuple[BrowserSession, str]:
-    """CSRF → Signin 备用预检；失败时重新建立会话。
+    """CSRF → Signin 备用预检；失败时保留同一会话重试。
 
     `/api/auth/providers` 只是 NextAuth 的发现接口，signin 端点并不依赖它返回的
     内容。实际运行中该接口很容易先被 Cloudflare 拦截，如果把它作为硬门槛，后续
@@ -130,34 +148,35 @@ def _network_preflight_with_retry(
     session: BrowserSession | None = None
     last_exc: BaseException | None = None
     state = fingerprint_state if fingerprint_state is not None else {}
+    # 一次网络预检只创建一个 BrowserSession。403 响应下发的新 __cf_bm、
+    # OAuth/设备上下文都保留在同一 Cookie Jar 中供下一轮使用。
+    session = _new_fingerprint_pinned_session(email, proxy, state)
     for attempt in range(1, max_attempts + 1):
-        if session is not None:
-            try:
-                session.session.close()
-            except Exception:
-                pass
-        # 保留 None / "" 的语义差异：显式空字符串必须是真直连。
-        session = _new_fingerprint_pinned_session(email, proxy, state)
         logger.info(
-            "[查活] 会话创建完成：proxy=%s device_id=%s（网络预检第 %s/%s 次）",
-            session.proxy or "配置随机/直连", session.device_id, attempt, max_attempts,
+            "[查活] 复用统一会话：proxy=%s device_id=%s oai_session_id=%s（网络预检第 %s/%s 次）",
+            session.proxy or "配置随机/直连", session.device_id,
+            str(getattr(session, "oai_session_id", "") or "")[:12] + "...",
+            attempt, max_attempts,
         )
         logger.info("[查活] 指纹摘要：%s", session.fingerprint_summary_text())
         try:
             _warm_login_fingerprint_context(session)
             csrf = get_csrf_token(session)
+            # 成功 Web 样本在 signin 前会再次确认匿名 NextAuth session。
+            probe_auth_session(session)
             authorize_url = signin_openai(session, csrf, email)
             return session, authorize_url
         except Exception as exc:
             last_exc = exc
             if attempt >= max_attempts or not _is_retryable_network_error(exc):
                 try:
-                    session.session.close()
+                    close_browser_session(session)
                 except Exception:
                     pass
                 raise
+            _clear_optional_bootstrap_circuit(session)
             logger.warning(
-                "[查活] 网络预检失败（%s/%s），重新建立会话重试：%s",
+                "[查活] 网络预检失败（%s/%s），保留当前 session/deviceId/CF Cookie 重试：%s",
                 attempt, max_attempts, str(exc)[:200],
             )
             time.sleep(2)
@@ -271,8 +290,44 @@ def _mfa_verify(session: BrowserSession, factor_id: str, code: str) -> dict:
 
 
 def _follow_continue_and_fetch(session: BrowserSession, continue_url: str, *, referer: str) -> dict:
-    follow_oauth_callback(session, continue_url, referer=referer)
-    return fetch_session(session)
+    """完成 callback/session，并对 403 保留同会话 Cookie 做阶段内重试。
+
+    callback 与 session 分开重试：callback 一旦成功就不重复消费 OAuth code；
+    只有 callback 本身失败时才重放 continue_url。重试耗尽后抛给上层，由
+    live_check_service 按既有策略换成独立直连会话完整兜底。
+    """
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            follow_oauth_callback(session, continue_url, referer=referer)
+            break
+        except Exception as exc:
+            if attempt >= max_attempts or not _is_retryable_network_error(exc):
+                raise
+            _clear_optional_bootstrap_circuit(session)
+            delay = float(2 ** (attempt - 1))
+            logger.warning(
+                "[查活] OAuth callback 临时失败（%s/%s），保留当前 "
+                "session/deviceId/CF Cookie，%.1fs 后重试：%s",
+                attempt, max_attempts, delay, str(exc)[:200],
+            )
+            time.sleep(delay)
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fetch_session(session)
+        except Exception as exc:
+            if attempt >= max_attempts or not _is_retryable_network_error(exc):
+                raise
+            _clear_optional_bootstrap_circuit(session)
+            delay = float(2 ** (attempt - 1))
+            logger.warning(
+                "[查活] Session/AT 拉取临时失败（%s/%s），保留当前 "
+                "session/deviceId/CF Cookie，%.1fs 后重试：%s",
+                attempt, max_attempts, delay, str(exc)[:200],
+            )
+            time.sleep(delay)
+    raise RuntimeError("查活 Session/AT 拉取重试耗尽")
 
 
 def _stored_access_token(email: str) -> str:
@@ -394,10 +449,10 @@ def _login_via_reauth(
     email_source: str | None = None,
 ) -> dict:
     """按 2FA 已验证链路重新认证并刷新 ChatGPT session。"""
-    auth_url = _trigger_reauth(session, email)
+    auth_url = _trigger_reauth_with_retry(session, email)
     logger.info("[查活] reauth authorize URL 已获取")
     human_delay("api")
-    final_url = _follow_reauth(session, auth_url)
+    final_url = _follow_reauth_with_retry(session, auth_url)
     dead_code = detect_account_unusable_text(final_url)
     if dead_code:
         raise AccountUnusableError(f"账号已废弃（{dead_code}）", error_code=dead_code)
@@ -505,6 +560,36 @@ def _login_via_password_or_otp(
     raise RuntimeError(f"密码登录成功但没有可用 continue_url: {password_result}")
 
 
+def _login_via_full_web_flow(
+    email: str,
+    proxy: str | None,
+    *,
+    email_source: str | None,
+    fingerprint_state: dict,
+) -> tuple[BrowserSession, dict]:
+    """按 plus 纯协议注册的 Web 登录序列建立一份全新登录态。"""
+    session, authorize_url = _network_preflight_with_retry(
+        email,
+        proxy,
+        fingerprint_state=fingerprint_state,
+    )
+    otp_after_ts = time.time()
+    final_url = follow_authorize(session, authorize_url)
+    dead_code = detect_account_unusable_text(final_url)
+    if dead_code:
+        raise AccountUnusableError(
+            f"账号已废弃（{dead_code}）",
+            error_code=dead_code,
+        )
+    session_info = _login_via_password_or_otp(
+        session,
+        email,
+        otp_after_ts,
+        email_source=email_source,
+    )
+    return session, session_info
+
+
 def log_path(email: str) -> Path:
     safe = str(email or "").replace("/", "_").replace("\\", "_").replace(":", "_")
     return _LOG_DIR / f"live-check-{safe}.log"
@@ -596,6 +681,7 @@ def check_account_liveness(
 
     fh: logging.FileHandler | None = None
     session: BrowserSession | None = None
+    task_fingerprint_state = fingerprint_state if fingerprint_state is not None else {}
     root_logger = logging.getLogger()
     thread_name = threading.current_thread().name
     with _RUNNING_LOCK:
@@ -620,7 +706,7 @@ def check_account_liveness(
             # /api/auth/providers。已开启 TOTP 的账号保留密码 → MFA 路径，
             # 避免把 MFA challenge 误当成邮箱 OTP 页面。
             logger.info("[查活] 流程：登录态预热 → CSRF → Reauth Signin → Authorize → 邮箱 OTP → OAuth callback → Session/AT")
-            session = _new_fingerprint_pinned_session(email, proxy, fingerprint_state)
+            session = _new_fingerprint_pinned_session(email, proxy, task_fingerprint_state)
             logger.info(
                 "[查活] 会话创建完成：proxy=%s device_id=%s（复用2FA稳定链路）",
                 session.proxy or "直连/配置随机",
@@ -629,31 +715,46 @@ def check_account_liveness(
             logger.info("[查活] 指纹摘要：%s", session.fingerprint_summary_text())
             _warm_authenticated_session(session, existing_access_token)
             human_delay("navigate")
-            session_info = _login_via_reauth(
-                session,
-                email,
-                time.time(),
-                email_source=email_source,
-            )
+            try:
+                session_info = _login_via_reauth(
+                    session,
+                    email,
+                    time.time(),
+                    email_source=email_source,
+                )
+            except Exception as reauth_exc:
+                if not _is_retryable_network_error(reauth_exc):
+                    raise
+                # reauth/callback 的同会话阶段重试已经耗尽。继续复用熔断的
+                # Cookie Jar 没有意义；参考 plus 纯协议注册，建立干净会话并按
+                # /auth/login → providers/session/csrf/session → signin 完整重登。
+                failed_proxy = session.proxy if proxy is None else proxy
+                logger.warning(
+                    "[查活] AT reauth 链临时失败，切换干净会话执行纯协议完整登录：%s",
+                    str(reauth_exc)[:240],
+                )
+                try:
+                    close_browser_session(session)
+                except Exception:
+                    pass
+                session, session_info = _login_via_full_web_flow(
+                    email,
+                    failed_proxy,
+                    email_source=email_source,
+                    fingerprint_state=task_fingerprint_state,
+                )
         else:
-            # 兼容没有本地 AT 或已开启 TOTP 的记录。providers 不是 signin 的
-            # 前置依赖，备用链只执行 CSRF → Signin，避免在 providers 403 时提前终止。
-            logger.info("[查活] 流程：CSRF → Signin → Authorize → 密码/邮箱 OTP → MFA(如有) → OAuth callback → Session/AT")
-            session, authorize_url = _network_preflight_with_retry(
-                email, proxy, fingerprint_state=fingerprint_state,
+            # 兼容没有本地 AT 或已开启 TOTP 的记录，按 plus 成功注册样本复现
+            # 登录页 document 与完整 NextAuth 调用顺序。
+            logger.info(
+                "[查活] 流程：登录页 → Providers/Session/CSRF/Session → Signin → "
+                "Authorize → 密码/邮箱 OTP → MFA(如有) → OAuth callback → Session/AT"
             )
-
-            otp_after_ts = time.time()
-            final_url = follow_authorize(session, authorize_url)
-            dead_code = detect_account_unusable_text(final_url)
-            if dead_code:
-                return {"ok": False, "status": "deactivated", "checked_at": checked_at, "error": dead_code}
-
-            session_info = _login_via_password_or_otp(
-                session,
+            session, session_info = _login_via_full_web_flow(
                 email,
-                otp_after_ts,
+                proxy,
                 email_source=email_source,
+                fingerprint_state=task_fingerprint_state,
             )
         access_token = str(session_info.get("accessToken") or "")
         if not access_token:
@@ -689,7 +790,7 @@ def check_account_liveness(
             logger.info("[查活] 结束：%s", email)
             if session is not None:
                 try:
-                    session.session.close()
+                    close_browser_session(session)
                 except Exception:
                     pass
             if fh is not None:

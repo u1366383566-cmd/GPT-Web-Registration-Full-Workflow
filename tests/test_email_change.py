@@ -75,25 +75,66 @@ class EmailChangeTests(unittest.TestCase):
         self.assertEqual(post.call_count, 2)
         new_session.assert_called_once_with(9, None, email="")
 
-    def test_recent_login_reuses_twofa_warmup_and_reauth_flow(self):
+    def test_recent_login_reuses_live_check_full_login_flow(self):
         session = MagicMock()
-        with patch("core.account_liveness._warm_authenticated_session") as warm, \
-             patch("core.account_liveness._login_via_reauth", return_value={
+        session.proxy = "socks5://127.0.0.1:7897"
+        login_session = MagicMock()
+        with patch("core.account_liveness._network_preflight_with_retry", return_value=(
+                 login_session, "https://auth.example/authorize",
+             )) as preflight, \
+             patch("core.openai_auth.follow_authorize", return_value="https://auth.example/login") as follow, \
+             patch("core.account_liveness._login_via_password_or_otp", return_value={
                  "accessToken": "fresh-token",
-             }) as reauth, \
+             }) as login, \
              patch.object(email_change_service, "_append_log"):
-            token = email_change_service._refresh_recent_login(
+            used_session, token = email_change_service._refresh_recent_login(
                 session,
                 account_id=19,
                 email="Old@Example.com",
                 email_source="imap",
-                access_token="stale-token",
             )
+        self.assertIs(used_session, login_session)
         self.assertEqual(token, "fresh-token")
-        warm.assert_called_once_with(session, "stale-token")
-        self.assertIs(reauth.call_args.args[0], session)
-        self.assertEqual(reauth.call_args.args[1], "Old@Example.com")
-        self.assertEqual(reauth.call_args.kwargs["email_source"], "imap")
+        self.assertEqual(preflight.call_args.args[:2], ("Old@Example.com", session.proxy))
+        follow.assert_called_once_with(login_session, "https://auth.example/authorize")
+        self.assertIs(login.call_args.args[0], login_session)
+        self.assertEqual(login.call_args.args[1], "Old@Example.com")
+        self.assertEqual(login.call_args.kwargs["email_source"], "imap")
+
+    def test_recent_login_callback_403_retries_full_flow_with_direct_session(self):
+        session = MagicMock()
+        session.proxy = "socks5://proxy.example:1080"
+        proxy_session = MagicMock()
+        direct_session = MagicMock()
+        with patch("core.account_liveness._network_preflight_with_retry", side_effect=[
+                 (proxy_session, "https://auth.example/proxy"),
+                 (direct_session, "https://auth.example/direct"),
+             ]) as preflight, \
+             patch("core.openai_auth.follow_authorize", side_effect=[
+                 RuntimeError("当前 BrowserSession 已熔断冷却：HTTP 403 from callback/openai"),
+                 "https://auth.example/login",
+             ]), \
+             patch("core.account_liveness._login_via_password_or_otp", return_value={
+                 "accessToken": "direct-token",
+             }) as login, \
+             patch.object(email_change_service, "_append_log") as append_log:
+            used_session, token = email_change_service._refresh_recent_login(
+                session,
+                account_id=20,
+                email="old@example.com",
+                email_source="imap",
+            )
+
+        self.assertIs(used_session, direct_session)
+        self.assertEqual(token, "direct-token")
+        self.assertEqual(preflight.call_args_list[0].args[:2], (
+            "old@example.com", "socks5://proxy.example:1080",
+        ))
+        self.assertEqual(preflight.call_args_list[1].args[:2], ("old@example.com", ""))
+        self.assertEqual(preflight.call_args_list[1].kwargs["fingerprint_state"], {})
+        proxy_session.session.close.assert_called_once_with()
+        self.assertIs(login.call_args.args[0], direct_session)
+        self.assertTrue(any("独立直连兜底" in call.args[1] for call in append_log.call_args_list))
 
     def test_post_change_live_check_reuses_current_session(self):
         session = MagicMock()
@@ -161,7 +202,7 @@ class EmailChangeTests(unittest.TestCase):
             "_post_with_network_retry",
             side_effect=[error, ({"success": True}, session)],
         ) as post, patch.object(
-            email_change_service, "_refresh_recent_login", return_value="fresh-token",
+            email_change_service, "_refresh_recent_login", return_value=(session, "fresh-token"),
         ) as refresh, patch.object(email_change_service, "_append_log"):
             _, token, _, reauthenticated = (
                 email_change_service._begin_change_with_optional_reauth(
@@ -181,7 +222,6 @@ class EmailChangeTests(unittest.TestCase):
             account_id=4,
             email="old@example.com",
             email_source="imap",
-            access_token="old-token",
         )
 
     def test_bulk_api_accepts_selected_source(self):

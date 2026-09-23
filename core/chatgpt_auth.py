@@ -14,10 +14,9 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# 2026-07-19 ARE 捕获：ChatGPT Web signin 已使用 5 位 passkey capabilities，
-# authorize URL 里还会带 ccaps=login_methods。纯协议保持同形态，避免落入旧/异常 auth 分支。
-_PASSKEY_CLIENT_CAPABILITIES = "11111"
-_CC_CAPS = "login_methods"
+# 2026-09-14 Roxy 成功样本：signin 不再主动携带 passkey capabilities；
+# authorize 使用两个 ccaps，并明确返回 ChatGPT 首页。
+_CC_CAPS = "login_methods chatgpt_login_finalizer_v1"
 
 
 def _ensure_authorize_context(authorize_url: str, session: BrowserSession, email: str) -> str:
@@ -30,21 +29,33 @@ def _ensure_authorize_context(authorize_url: str, session: BrowserSession, email
         if not parsed.netloc.endswith("auth.openai.com"):
             return authorize_url
         params = parse_qs(parsed.query, keep_blank_values=True)
+        # 旧实现主动注入该字段；当前成功浏览器 authorize 已不携带。
+        changed = bool(params.pop("ext-passkey-client-capabilities", None))
+        ui_locale = session.navigator_language()
         required = {
             "ext-oai-did": session.device_id,
             "auth_session_logging_id": session.auth_session_logging_id,
-            "ext-passkey-client-capabilities": _PASSKEY_CLIENT_CAPABILITIES,
             "screen_hint": "login_or_signup",
             "login_hint": email,
+            "ui_locales": ui_locale,
             "ccaps": _CC_CAPS,
+            "auth_return_target_category": "chatgpt_home",
         }
-        changed = False
         for key, value in required.items():
-            if not params.get(key):
+            if key in {"ccaps", "auth_return_target_category", "ui_locales"}:
+                if params.get(key) != [value]:
+                    params[key] = [value]
+                    changed = True
+            elif not params.get(key):
                 params[key] = [value]
                 changed = True
         if not changed:
             return authorize_url
+        logger.info(
+            "[步骤3] authorize 上下文已对齐：ui_locales=%s oai-did=%s",
+            ui_locale,
+            str(session.device_id)[:12] + "...",
+        )
         return parsed._replace(query=urlencode(params, doseq=True)).geturl()
     except Exception:
         return authorize_url
@@ -71,7 +82,7 @@ def get_providers(session: BrowserSession) -> dict:
         }
     """
     url = "https://chatgpt.com/api/auth/providers"
-    headers = session.get_nextauth_headers(referer="https://chatgpt.com/")
+    headers = session.get_nextauth_headers(referer="https://chatgpt.com/auth/login")
 
     logger.info("[步骤1] 获取 OAuth Providers...")
     resp = session.get(url, headers=headers)
@@ -93,7 +104,7 @@ def get_csrf_token(session: BrowserSession) -> str:
         csrfToken 字符串
     """
     url = "https://chatgpt.com/api/auth/csrf"
-    headers = session.get_nextauth_headers(referer="https://chatgpt.com/")
+    headers = session.get_nextauth_headers(referer="https://chatgpt.com/auth/login")
 
     logger.info("[步骤2] 获取 CSRF Token...")
     resp = session.get(url, headers=headers)
@@ -103,6 +114,20 @@ def get_csrf_token(session: BrowserSession) -> str:
     csrf_token = data.get("csrfToken", "")
     logger.info(f"[步骤2] 获取 CSRF Token 成功: {csrf_token[:20]}...")
     return csrf_token
+
+
+def probe_auth_session(session: BrowserSession) -> dict:
+    """按 Web 登录页顺序在 providers 之后读取一次匿名 NextAuth session。"""
+    url = "https://chatgpt.com/api/auth/session"
+    headers = session.get_nextauth_headers(referer="https://chatgpt.com/auth/login")
+    logger.info("[步骤1.5] 读取匿名 Auth Session...")
+    resp = session.get(url, headers=headers)
+    resp.raise_for_status()
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+    return data if isinstance(data, dict) else {}
 
 
 def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
@@ -125,20 +150,19 @@ def signin_openai(session: BrowserSession, csrf_token: str, email: str) -> str:
         "prompt": "login",
         "ext-oai-did": session.device_id,
         "auth_session_logging_id": session.auth_session_logging_id,
-        "ext-passkey-client-capabilities": _PASSKEY_CLIENT_CAPABILITIES,
         "screen_hint": "login_or_signup",
         "login_hint": email,
     }
     url = "https://chatgpt.com/api/auth/signin/openai?" + urlencode(query_params)
 
     # 构造请求头
-    headers = session.get_nextauth_headers(referer="https://chatgpt.com/")
+    headers = session.get_nextauth_headers(referer="https://chatgpt.com/auth/login")
     headers["content-type"] = "application/x-www-form-urlencoded"
     headers["origin"] = "https://chatgpt.com"
 
     # 构造请求体
     body = urlencode({
-        "callbackUrl": "https://chatgpt.com/",
+        "callbackUrl": "/",
         "csrfToken": csrf_token,
         "json": "true",
     })

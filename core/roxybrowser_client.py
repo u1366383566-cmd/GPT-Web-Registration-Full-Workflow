@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import threading
 import time
 from dataclasses import dataclass
 from urllib.parse import unquote, urljoin, urlparse
@@ -14,6 +15,30 @@ import requests
 from config import roxybrowser as _cfg
 
 logger = logging.getLogger(__name__)
+
+# Roxy 的 /browser/create 在多 worker 同时到达时可能返回“正在创建中”。
+# 为所有客户端实例共享创建时隙，确保进程内请求起始时间至少错开配置的间隔。
+_CREATE_SLOT_LOCK = threading.Lock()
+_NEXT_CREATE_SLOT = 0.0
+# 创建 Profile 到拿到调试地址期间串行化，避免 Roxy 内核/端口竞争。
+_ROXY_WINDOW_CREATE_LOCK = threading.Lock()
+
+
+def _wait_for_create_slot() -> None:
+    global _NEXT_CREATE_SLOT
+
+    interval = max(0.0, float(getattr(_cfg, "ROXY_CREATE_INTERVAL", 1.5) or 0.0))
+    if interval <= 0:
+        return
+
+    with _CREATE_SLOT_LOCK:
+        now = time.monotonic()
+        wait_for = max(0.0, _NEXT_CREATE_SLOT - now)
+        _NEXT_CREATE_SLOT = max(now, _NEXT_CREATE_SLOT) + interval
+
+    if wait_for > 0:
+        logger.info("[Roxy] /browser/create 请求错峰，等待 %.2fs", wait_for)
+        time.sleep(wait_for)
 
 
 @dataclass
@@ -183,6 +208,8 @@ class RoxyBrowserClient:
     def __init__(self, api_base: str | None = None, token: str | None = None):
         self.api_base = (api_base or _cfg.ROXY_API_BASE).strip()
         self.token = (token if token is not None else _cfg.ROXY_API_TOKEN).strip()
+        self._proxy_pool_relay = None
+        self._proxy_pool_target = ""
         self.http = requests.Session()
         if self.token:
             # 官方文档要求所有接口请求头必须加 token。这里同时兼容 token / Authorization。
@@ -211,10 +238,13 @@ class RoxyBrowserClient:
     def request(self, method: str, path: str, *, params: dict | None = None, json_body: dict | None = None) -> dict:
         url = _join_url(self.api_base, path)
         method_u = method.upper()
-        # create 超时后服务端可能已创建环境，直接重试可能产生孤儿环境；默认不重试 create。
         is_create = str(path or "").rstrip("/").endswith("/create") or "browser/create" in str(path or "")
-        max_attempts = 1 if is_create else max(1, int(getattr(_cfg, "ROXY_API_RETRIES", 3) or 3))
-        base_delay = max(0.5, float(getattr(_cfg, "ROXY_API_RETRY_DELAY", 2) or 2))
+        if is_create:
+            max_attempts = max(1, int(getattr(_cfg, "ROXY_CREATE_RETRIES", 3) or 3))
+            base_delay = max(0.5, float(getattr(_cfg, "ROXY_CREATE_RETRY_DELAY", 3) or 3))
+        else:
+            max_attempts = max(1, int(getattr(_cfg, "ROXY_API_RETRIES", 3) or 3))
+            base_delay = max(0.5, float(getattr(_cfg, "ROXY_API_RETRY_DELAY", 2) or 2))
         last_exc: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             try:
@@ -253,8 +283,10 @@ class RoxyBrowserClient:
                     raise
                 delay = base_delay * attempt
                 logger.warning(
-                    "[Roxy] API 请求失败，将在 %.1fs 后重试：%s %s attempt=%s/%s error=%s",
-                    delay, method_u, path, attempt, max_attempts, exc,
+                    "[Roxy] API 请求失败，将在 %.1fs 后使用相同%s重试：%s %s attempt=%s/%s error=%s",
+                    delay,
+                    " create payload/name " if is_create else "请求参数",
+                    method_u, path, attempt, max_attempts, exc,
                 )
                 time.sleep(delay)
         raise last_exc or RuntimeError(f"Roxy API 请求失败 {method_u} {path}")
@@ -412,6 +444,8 @@ class RoxyBrowserClient:
 
     def create_profile(self, payload: dict | None = None) -> str:
         body = dict(getattr(_cfg, "ROXY_PROFILE_CREATE_PAYLOAD", {}) or {})
+        if payload:
+            body.update(payload)
         random_name_enabled = bool(getattr(_cfg, "ROXY_RANDOM_PROFILE_NAME_ON_CREATE", True))
         if random_name_enabled:
             # 覆盖 ROXY_PROFILE_CREATE_PAYLOAD 里的固定 name，避免所有 Roxy 窗口同名。
@@ -439,22 +473,24 @@ class RoxyBrowserClient:
             body.setdefault("projectId", project_id)
         if bool(getattr(_cfg, "ROXY_CREATE_USE_PROXY_POOL", False)) and not body.get("proxyInfo"):
             from config import proxy as _proxy_cfg
+            from core.proxy_chain import open_proxy_pool_proxy
 
-            proxy_url = _proxy_cfg.pick_proxy()
+            target_proxy = _proxy_cfg.pick_proxy()
+            proxy_url, relay = open_proxy_pool_proxy(target_proxy)
+            self._proxy_pool_relay = relay
+            self._proxy_pool_target = str(target_proxy or "").strip()
             if proxy_url:
                 proxy_info = _proxy_url_to_roxy_info(proxy_url)
                 body["proxyInfo"] = proxy_info
                 logger.info(
-                    "[Roxy] 创建环境启用代理池：proxy=%s type=%s host=%s port=%s",
-                    _mask_proxy(proxy_url),
+                    "[Roxy] 创建环境启用代理池：target=%s transport=%s type=%s host=%s port=%s",
+                    str(target_proxy or "").strip(), str(proxy_url or "").strip(),
                     proxy_info.get("protocol") or proxy_info.get("proxyCategory"),
                     proxy_info.get("host"),
                     proxy_info.get("port"),
                 )
             else:
                 logger.warning("[Roxy] 已启用 ROXY_CREATE_USE_PROXY_POOL，但 PROXY_POOL 为空，本次创建环境不设置代理")
-        if payload:
-            body.update(payload)
         if not body.get("workspaceId"):
             raise RuntimeError(
                 "Roxy 创建环境需要 workspaceId。请在 config/roxybrowser.py 或 WebUI 的 RoxyBrowser 配置中填写 ROXY_WORKSPACE_ID，"
@@ -470,6 +506,7 @@ class RoxyBrowserClient:
             body.get("osVersion") or "-",
             random_os_enabled,
         )
+        _wait_for_create_slot()
         result = self.request(_cfg.ROXY_CREATE_METHOD, _cfg.ROXY_CREATE_PATH, json_body=body)
         profile_id = _first(result, [
             ("id",), ("dirId",), ("dir_id",), ("profile_id",), ("profileId",), ("browser_id",),
@@ -489,6 +526,10 @@ class RoxyBrowserClient:
         return text
 
     def open_profile(self, profile_id: str | None = None) -> RoxyOpenResult:
+        with _ROXY_WINDOW_CREATE_LOCK:
+            return self._open_profile_locked(profile_id)
+
+    def _open_profile_locked(self, profile_id: str | None = None) -> RoxyOpenResult:
         one_profile = bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
         configured_pid = self._normalize_profile_id(profile_id if profile_id is not None else getattr(_cfg, "ROXY_PROFILE_ID", ""))
         if one_profile and configured_pid:
@@ -536,6 +577,9 @@ class RoxyBrowserClient:
         ]) or None
         if not debugger_address and not webdriver_url:
             raise RuntimeError(f"Roxy 已打开环境但未返回 Selenium/调试地址，请检查 ROXY_OPEN_PATH 或接口响应: {result}")
+        if self._proxy_pool_target:
+            result = dict(result)
+            result["proxy_pool_target"] = self._proxy_pool_target
         return RoxyOpenResult(
             pid,
             result,
@@ -586,23 +630,49 @@ class RoxyBrowserClient:
 
     def cleanup_profile(self, opened: RoxyOpenResult | None) -> None:
         """任务结束清理：关闭窗口；一号一环境时删除本轮创建的 Profile。"""
-        if not opened or not opened.profile_id:
-            return
         keep_open = bool(getattr(_cfg, "ROXY_KEEP_BROWSER_OPEN", False))
-        if not keep_open:
-            self.close_profile(opened.profile_id)
-
-        should_delete = (
-            bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
-            and bool(getattr(_cfg, "ROXY_DELETE_PROFILE_AFTER_RUN", True))
-            and bool(opened.created_by_run)
-        )
-        if should_delete:
-            # 删除前尽量确保已关闭；若 keep_open=True 则不删除，便于调试保留现场。
-            if keep_open:
-                logger.info("[Roxy] ROXY_KEEP_BROWSER_OPEN=True，跳过删除环境：%s", opened.profile_id)
+        try:
+            if not opened or not opened.profile_id:
                 return
-            self.delete_profile(opened.profile_id)
+            if not keep_open:
+                self.close_profile(opened.profile_id)
+
+            should_delete = (
+                bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
+                and bool(getattr(_cfg, "ROXY_DELETE_PROFILE_AFTER_RUN", True))
+                and bool(opened.created_by_run)
+            )
+            if should_delete:
+                # 删除前尽量确保已关闭；若 keep_open=True 则不删除，便于调试保留现场。
+                if keep_open:
+                    logger.info("[Roxy] ROXY_KEEP_BROWSER_OPEN=True，跳过删除环境：%s", opened.profile_id)
+                    return
+                self.delete_profile(opened.profile_id)
+        finally:
+            if not keep_open:
+                self.close_proxy_pool_relay()
+
+    def close_proxy_pool_relay(self) -> None:
+        relay, self._proxy_pool_relay = self._proxy_pool_relay, None
+        if relay is not None:
+            if relay.last_error:
+                logger.warning(
+                    "[Roxy] 代理链最后一次错误：target=%s upstream=%s error=%s",
+                    _mask_proxy(self._proxy_pool_target),
+                    _mask_proxy(getattr(relay.upstream, "raw", "")),
+                    relay.last_error,
+                )
+            relay.close()
+
+    def proxy_transport_snapshot(self) -> dict | None:
+        """返回本轮 Roxy 经本地代理链传输的全浏览器流量。"""
+        relay = self._proxy_pool_relay
+        if relay is None:
+            return None
+        try:
+            return relay.traffic_snapshot()
+        except Exception:
+            return None
 
     @staticmethod
     def _extract_debugger_address(payload: dict) -> str | None:

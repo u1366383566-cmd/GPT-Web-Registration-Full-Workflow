@@ -280,6 +280,115 @@ class BrowserTrafficTests(unittest.TestCase):
         self.assertEqual(result["failed_request_count"], 0)
         self.assertEqual(result["data_saver_blocked_count"], 1)
 
+    def test_selenium_does_not_count_local_fulfilled_asset_as_network_bytes(self):
+        entries = [
+            _performance_event(
+                "Network.requestWillBeSent",
+                {
+                    "requestId": "local-1",
+                    "type": "Script",
+                    "request": {
+                        "method": "GET",
+                        "url": "https://chatgpt.com/_next/static/chunks/app.js",
+                        "headers": {},
+                    },
+                },
+            ),
+            _performance_event(
+                "Network.responseReceived",
+                {
+                    "requestId": "local-1",
+                    "type": "Script",
+                    "response": {
+                        "status": 200,
+                        "headers": {"content-type": "application/javascript"},
+                    },
+                },
+            ),
+            _performance_event(
+                "Network.dataReceived",
+                {"requestId": "local-1", "encodedDataLength": 5000},
+            ),
+            _performance_event(
+                "Network.loadingFinished",
+                {"requestId": "local-1", "encodedDataLength": 5000},
+            ),
+        ]
+
+        class _LocalCache:
+            @staticmethod
+            def was_fulfilled_network_request(request_id):
+                return request_id == "local-1"
+
+        driver = _SeleniumDriver(entries)
+        tracker = SeleniumTrafficTracker(driver)
+        tracker.attach_local_asset_cache(_LocalCache())
+        result = tracker.stop()
+
+        self.assertEqual(result["http_upload_bytes"], 0)
+        self.assertEqual(result["http_download_bytes"], 0)
+        self.assertEqual(result["completed_request_count"], 1)
+
+    def test_selenium_excludes_roxy_loopback_resources_from_all_totals(self):
+        entries = [
+            _performance_event(
+                "Network.requestWillBeSent",
+                {
+                    "requestId": "roxy-local",
+                    "type": "Font",
+                    "request": {
+                        "method": "GET",
+                        "url": "http://127.0.0.1:45535/fonts/Inter-Regular.ttf",
+                        "headers": {},
+                    },
+                },
+            ),
+            _performance_event(
+                "Network.responseReceived",
+                {
+                    "requestId": "roxy-local",
+                    "response": {"status": 200, "statusText": "OK", "headers": {}},
+                },
+            ),
+            _performance_event(
+                "Network.loadingFinished",
+                {"requestId": "roxy-local", "encodedDataLength": 400000},
+            ),
+            _performance_event(
+                "Network.requestWillBeSent",
+                {
+                    "requestId": "remote",
+                    "type": "Fetch",
+                    "request": {
+                        "method": "GET",
+                        "url": "https://chatgpt.com/api/auth/session",
+                        "headers": {},
+                    },
+                },
+            ),
+            _performance_event(
+                "Network.responseReceived",
+                {
+                    "requestId": "remote",
+                    "response": {"status": 200, "statusText": "OK", "headers": {}},
+                },
+            ),
+            _performance_event(
+                "Network.loadingFinished",
+                {"requestId": "remote", "encodedDataLength": 20},
+            ),
+        ]
+        driver = _SeleniumDriver(entries)
+        with patch("core.browser_traffic._browser_cfg.BROWSER_TRAFFIC_DETAIL_LOG", True):
+            tracker = SeleniumTrafficTracker(driver)
+            result = tracker.stop()
+
+        self.assertEqual(result["request_count"], 1)
+        self.assertEqual(result["completed_request_count"], 1)
+        self.assertEqual(result["detail_recorded_count"], 1)
+        self.assertGreaterEqual(result["http_download_bytes"], 20)
+        self.assertLess(result["http_download_bytes"], 400000)
+
     def test_playwright_logs_redacted_resource_detail_and_sizes(self):
         context = _Emitter()
         context.pages = []

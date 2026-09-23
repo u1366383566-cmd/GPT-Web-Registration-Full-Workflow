@@ -183,6 +183,13 @@ def _account_secret_value(row: dict, field: str) -> str:
     if field == "totp_code":
         secret = str(row.get("totp_secret") or "").strip()
         return pyotp.TOTP(secret).now() if secret else ""
+    if field == "login_credentials":
+        password = _account_secret_value(row, "password")
+        if password == "未设置":
+            password = ""
+        return "---".join((
+            str(row.get("email") or "").strip(), password, str(row.get("totp_secret") or "").strip(),
+        ))
     if field == "password":
         extra_raw = row.get("extra_json")
         extra = {}
@@ -194,7 +201,14 @@ def _account_secret_value(row: dict, field: str) -> str:
         elif isinstance(extra_raw, dict):
             extra = extra_raw
         return str(extra.get("registration_password") or row.get("registration_password") or "未设置")
-    raise ValueError("field 仅支持 access_token/copy_line/codex_agent_token/totp_secret/totp_code/password")
+    if field == "full_export":
+        try:
+            from core.db import _account_full_export_line
+
+            return str(_account_full_export_line(row) or "")
+        except Exception:
+            return ""
+    raise ValueError("field 仅支持 access_token/copy_line/codex_agent_token/totp_secret/totp_code/password/login_credentials/full_export")
 
 
 def _compact_job_for_list(row: dict) -> dict:
@@ -683,7 +697,12 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, **queued_payload}), 409
         if not queued.get("accepted"):
             return jsonify({"ok": False, **queued_payload}), 503
-        return jsonify({"ok": True, "started": True, **queued_payload}), 202
+        return jsonify({
+            "ok": True,
+            "started": True,
+            "queue": twofa_service.queue_settings(),
+            **queued_payload,
+        }), 202
 
     @app.post("/api/accounts/<int:acc_id>/change-email")
     def api_account_change_email(acc_id: int):
@@ -834,6 +853,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             "failed_count": len(failed),
             "skipped": skipped,
             "skipped_count": len(skipped),
+            "queue": twofa_service.queue_settings(),
         }), 202
 
     @app.post("/api/accounts/note-bulk")

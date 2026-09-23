@@ -9,6 +9,7 @@ TLS/IP/代理隧道等协议额外开销，因此不等同于代理服务商的�
 from __future__ import annotations
 
 import json
+import ipaddress
 import logging
 import threading
 import time
@@ -109,6 +110,20 @@ def _safe_url_for_log(url: Any, *, max_length: int = 600) -> str:
     return safe[:max_length] + ("…" if len(safe) > max_length else "")
 
 
+def _is_loopback_url(url: Any) -> bool:
+    """本机回环 HTTP(S)/WS(S) 资源不属于代理或公网注册流量。"""
+    try:
+        parsed = urlsplit(str(url or ""))
+        if parsed.scheme.lower() not in {"http", "https", "ws", "wss"}:
+            return False
+        host = str(parsed.hostname or "").strip().lower().rstrip(".")
+        if host == "localhost" or host.endswith(".localhost"):
+            return True
+        return bool(host and ipaddress.ip_address(host).is_loopback)
+    except (TypeError, ValueError):
+        return False
+
+
 def _coverage_count(value: Any) -> int:
     """把 Profiler 覆盖率中的 count/offset 规范化为非负整数。"""
     try:
@@ -158,6 +173,7 @@ class _TrafficAccumulator:
         self.websocket_count = 0
         self._reported = False
         self._data_saver: Any | None = None
+        self._local_asset_cache: Any | None = None
         self._detail_log_enabled = bool(getattr(_browser_cfg, "BROWSER_TRAFFIC_DETAIL_LOG", False))
         try:
             configured_max = int(getattr(_browser_cfg, "BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES", 2000) or 2000)
@@ -187,6 +203,10 @@ class _TrafficAccumulator:
     def attach_data_saver(self, data_saver: Any | None) -> None:
         """把省流量拦截器的计数附加到浏览器流量快照。"""
         self._data_saver = data_saver
+
+    def attach_local_asset_cache(self, cache: Any | None) -> None:
+        """让统计器把 Fetch.fulfillRequest 本地正文排除出代理下载流量。"""
+        self._local_asset_cache = cache
 
     def _js_coverage_mark_target_attempt(self) -> None:
         if not self._js_coverage_log_enabled:
@@ -1204,6 +1224,7 @@ class SeleniumTrafficTracker(_TrafficAccumulator):
         self._log_supported: bool | None = None
         self._network_event_count = 0
         self._requests: dict[str, dict[str, Any]] = {}
+        self._excluded_loopback_request_ids: set[str] = set()
         self._fallback_seen: set[tuple[Any, ...]] = set()
         self._request_generations: dict[str, int] = {}
         self._websocket_stats: dict[str, dict[str, Any]] = {}
@@ -1386,6 +1407,28 @@ class SeleniumTrafficTracker(_TrafficAccumulator):
 
     def _handle_cdp_event(self, method: str, params: dict[str, Any]) -> None:
         self._network_event_count += 1
+
+        event_request_id = str(params.get("requestId") or "")
+        if method == "Network.webSocketCreated" and _is_loopback_url(params.get("url")):
+            if event_request_id:
+                self._excluded_loopback_request_ids.add(event_request_id)
+            return
+        if (
+            method != "Network.requestWillBeSent"
+            and event_request_id
+            and event_request_id in self._excluded_loopback_request_ids
+        ):
+            return
+
+        def is_local_asset(request_id: str) -> bool:
+            cache = self._local_asset_cache
+            if cache is None:
+                return False
+            try:
+                return bool(cache.was_fulfilled_network_request(request_id))
+            except Exception:
+                return False
+
         if method == "Network.requestWillBeSent":
             request_id = str(params.get("requestId") or "")
             if not request_id:
@@ -1401,6 +1444,11 @@ class SeleniumTrafficTracker(_TrafficAccumulator):
             request = params.get("request") or {}
             resource_type = _normalize_resource_type(params.get("type") or "")
             request_url = str(request.get("url") or "") if isinstance(request, dict) else ""
+            if _is_loopback_url(request_url):
+                self._excluded_loopback_request_ids.add(request_id)
+                self._requests.pop(request_id, None)
+                return
+            self._excluded_loopback_request_ids.discard(request_id)
             if resource_type == "other" and request_url.lower().startswith(("ws:", "wss:")):
                 resource_type = "websocket"
             generation = self._request_generations.get(request_id, 0) + 1
@@ -1431,6 +1479,9 @@ class SeleniumTrafficTracker(_TrafficAccumulator):
                 record["response"] = response
                 if response.get("fromDiskCache") or response.get("fromMemoryCache"):
                     record["served_from_cache"] = True
+                if is_local_asset(request_id):
+                    record["served_from_cache"] = True
+                    record["served_from_local_asset_cache"] = True
             return
 
         if method == "Network.webSocketHandshakeResponseReceived":
@@ -1452,12 +1503,18 @@ class SeleniumTrafficTracker(_TrafficAccumulator):
             request_id = str(params.get("requestId") or "")
             record = self._requests.get(request_id)
             if record is not None:
+                if is_local_asset(request_id):
+                    record["served_from_cache"] = True
+                    record["served_from_local_asset_cache"] = True
                 self._finish_cdp_request(record, body_size=params.get("encodedDataLength", 0))
             return
 
         if method == "Network.dataReceived":
             request_id = str(params.get("requestId") or "")
             record = self._requests.get(request_id)
+            if record is not None and is_local_asset(request_id):
+                record["served_from_cache"] = True
+                record["served_from_local_asset_cache"] = True
             if record is not None and not record.get("served_from_cache"):
                 record["received_body_bytes"] = (
                     _non_negative_int(record.get("received_body_bytes"))
@@ -1657,6 +1714,8 @@ class SeleniumTrafficTracker(_TrafficAccumulator):
         entries = list(data.get("resources") or []) + list(data.get("navigation") or [])
         for item in entries:
             if not isinstance(item, dict):
+                continue
+            if _is_loopback_url(item.get("name")):
                 continue
             key = (
                 document,

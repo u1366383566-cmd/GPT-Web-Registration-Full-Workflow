@@ -143,10 +143,11 @@ class _SwitchTo:
 class CloakSeleniumDriver:
     """只实现本项目 Roxy Selenium 流程实际用到的 WebDriver 子集。"""
 
-    def __init__(self, browser: Any, context: Any | None, page: Any):
+    def __init__(self, browser: Any, context: Any | None, page: Any, proxy_relay: Any | None = None):
         self.browser = browser
         self.context = context
         self.page = page
+        self._proxy_relay = proxy_relay
         self._page_load_timeout_ms = int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90) * 1000
         self._is_cloak_selenium_adapter = True
         self.switch_to = _SwitchTo(self)
@@ -211,6 +212,9 @@ class CloakSeleniumDriver:
             self.browser.close()
         except Exception:
             pass
+        relay, self._proxy_relay = self._proxy_relay, None
+        if relay is not None:
+            relay.close()
 
     def find_elements(self, by: Any, selector: str) -> list[CloakElement]:
         loc = self._locator(by, selector)
@@ -447,12 +451,17 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
     proxy=""    时显式禁用代理；
     proxy="..." 时使用指定代理。
     """
+    proxy_relay = None
+    proxy_pool_target = ""
     if proxy is None and bool(getattr(_cfg, "CLOAK_USE_PROXY", True)):
         try:
             from config.proxy import pick_proxy
-            proxy = pick_proxy()
         except Exception:
             proxy = None
+        else:
+            from core.proxy_chain import open_proxy_pool_proxy
+            proxy_pool_target = str(pick_proxy() or "").strip()
+            proxy, proxy_relay = open_proxy_pool_proxy(proxy_pool_target)
     try:
         from cloakbrowser import launch, launch_persistent_context
     except ImportError as exc:
@@ -510,9 +519,15 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
         context = browser.new_context(**context_kwargs)
         page = context.new_page()
 
-    driver = CloakSeleniumDriver(browser=browser, context=context, page=page)
+    driver = CloakSeleniumDriver(browser=browser, context=context, page=page, proxy_relay=proxy_relay)
     # Roxy/Cloak 共用部分页面操作函数；给共享函数一个显式日志前缀，
     # 避免 Cloak 注册流程里出现 `[Roxy注册]`。
     driver._registration_log_prefix = "[Cloak注册]"
     driver.set_page_load_timeout(int(getattr(_cfg, "CLOAK_SELENIUM_TIMEOUT", 90) or 90))
-    return driver, CloakOpenResult(raw={"driver": "cloakbrowser", "proxy": proxy_url, "locale": locale_opts, "options": {k: v for k, v in opts.items() if k != "license_key"}})
+    return driver, CloakOpenResult(raw={
+        "driver": "cloakbrowser",
+        "proxy": proxy_url,
+        "proxy_pool_target": proxy_pool_target or proxy_url,
+        "locale": locale_opts,
+        "options": {k: v for k, v in opts.items() if k != "license_key"},
+    })

@@ -16,7 +16,7 @@ from core.email_provider import (
     acquire_email_from_source, email_material_line,
     release_email_if_unconsumed, wait_for_otp,
 )
-from core.session import BrowserSession
+from core.session import BrowserSession, close_browser_session
 
 logger = logging.getLogger(__name__)
 _EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="email-change")
@@ -177,37 +177,106 @@ def _refresh_recent_login(
     account_id: int,
     email: str,
     email_source: str,
-    access_token: str,
-) -> str:
-    """复用已验证的 2FA 流程，预热登录态并完成一次邮箱 OTP 重认证。"""
+) -> tuple[BrowserSession, str]:
+    """按查活的完整登录链重新登录，建立服务端认可的 Recent Login。
+
+    change_email 的 reauth 链会无条件向原邮箱发送 OTP，即使账号已经保存了
+    注册密码。这里改为复用查活的备用登录链：优先密码（以及 TOTP），仅在
+    登录页确实要求邮箱验证时才读取原邮箱 OTP。
+    """
     # 延迟导入，避免 account_liveness 初始化时形成模块循环。
-    from core.account_liveness import _login_via_reauth, _warm_authenticated_session
-
-    _append_log(account_id, "开始账号级指纹预热（复用现有 accessToken）")
-    warm_started = time.monotonic()
-    _warm_authenticated_session(session, access_token)
-    _append_log(account_id, f"登录态预热完成：cost={_cost(warm_started)}")
-    _append_log(
-        account_id,
-        "Recent Login 开始：CSRF → reauth signin → authorize → 原邮箱 OTP → OAuth callback → session/AT",
+    from core.account_liveness import (
+        _login_via_password_or_otp,
+        _network_preflight_with_retry,
+    )
+    from core.openai_auth import (
+        AccountUnusableError,
+        detect_account_unusable_text,
+        follow_authorize,
     )
 
-    otp_after_ts = time.time()
-    reauth_started = time.monotonic()
-    info = _login_via_reauth(
-        session,
-        email,
-        otp_after_ts,
-        email_source=email_source or None,
-    )
-    fresh_token = str((info or {}).get("accessToken") or "").strip()
-    if not fresh_token:
-        raise RuntimeError("Recent Login 重认证完成，但未获取到新 access_token")
     _append_log(
         account_id,
-        f"Recent Login 完成：原邮箱 OTP 已验证，已获取新鲜 AT，cost={_cost(reauth_started)}",
+        "Recent Login 开始：复用查活重新登录逻辑（CSRF → signin → authorize → 密码/OTP/MFA → OAuth callback → session/AT）",
     )
-    return fresh_token
+
+    # 保留本次换绑已经生成的账号级设备身份和浏览器画像，同时让查活预检
+    # 创建干净的登录 Cookie Jar，并获得其网络重试能力。
+    fingerprint_state = {
+        "fingerprint_seed": f"account:{email.lower()}",
+    }
+    for key in (
+        "device_id", "auth_session_logging_id", "oai_session_id", "sentinel_sid",
+    ):
+        value = str(getattr(session, key, "") or "").strip()
+        if value:
+            fingerprint_state[key] = value
+    browser_profile = getattr(session, "browser_profile", None)
+    if isinstance(browser_profile, dict):
+        fingerprint_state["browser_profile"] = dict(browser_profile)
+
+    login_started = time.monotonic()
+    selected_proxy = getattr(session, "proxy", None)
+    # 与后台查活一致：代理路线的完整认证链只要收到 403，就用一套完全
+    # 独立的直连会话重跑。OAuth callback 的 403 会让当前 BrowserSession
+    # 进入 15 分钟熔断；仅清除熔断后继续请求既不能修复出口，也容易复用
+    # 已污染的 CF Cookie，因此必须从 CSRF 开始重新登录。
+    routes = [(selected_proxy, fingerprint_state, "当前代理路线")]
+    if selected_proxy:
+        routes.append(("", {}, "独立直连兜底"))
+
+    last_exc: BaseException | None = None
+    for route_index, (route_proxy, route_state, route_label) in enumerate(routes):
+        login_session: BrowserSession | None = None
+        try:
+            _append_log(account_id, f"Recent Login 路线开始：{route_label}")
+            login_session, authorize_url = _network_preflight_with_retry(
+                email,
+                route_proxy,
+                fingerprint_state=route_state,
+            )
+            otp_after_ts = time.time()
+            final_url = follow_authorize(login_session, authorize_url)
+            dead_code = detect_account_unusable_text(final_url)
+            if dead_code:
+                raise AccountUnusableError(
+                    f"账号已废弃（{dead_code}）",
+                    error_code=dead_code,
+                )
+            info = _login_via_password_or_otp(
+                login_session,
+                email,
+                otp_after_ts,
+                email_source=email_source or None,
+            )
+            fresh_token = str((info or {}).get("accessToken") or "").strip()
+            if not fresh_token:
+                raise RuntimeError("Recent Login 重新登录完成，但未获取到新 access_token")
+            _append_log(
+                account_id,
+                f"Recent Login 完成：route={route_label}，已获取新鲜 AT，cost={_cost(login_started)}",
+            )
+            return login_session, fresh_token
+        except AccountUnusableError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            is_proxy_403 = route_index == 0 and bool(selected_proxy) and "403" in str(exc)
+            if not is_proxy_403:
+                raise
+            _append_log(
+                account_id,
+                "Recent Login 代理路线收到 403/会话熔断，"
+                f"关闭失败会话并从 CSRF 开始使用独立直连兜底：{type(exc).__name__}: {str(exc)[:260]}",
+            )
+            if login_session is not None:
+                try:
+                    close_browser_session(login_session)
+                except Exception:
+                    pass
+
+    assert last_exc is not None
+    raise last_exc
 
 
 def _begin_change_with_optional_reauth(
@@ -236,13 +305,12 @@ def _begin_change_with_optional_reauth(
         if not _is_reauth_required(exc):
             raise
 
-    _append_log(account_id, "服务端返回 reauth_required，开始执行原邮箱 OTP 重认证")
-    fresh_token = _refresh_recent_login(
+    _append_log(account_id, "服务端返回 reauth_required，开始按查活逻辑重新登录原账号")
+    session, fresh_token = _refresh_recent_login(
         session,
         account_id=account_id,
         email=current_email,
         email_source=current_source,
-        access_token=access_token,
     )
     # 新邮箱 OTP 的时间基准必须放在第二次 begin 之前，不能沿用重认证前时间。
     otp_after_ts = time.time()
@@ -254,7 +322,7 @@ def _begin_change_with_optional_reauth(
         payload={"email": new_email},
         fingerprint_email=current_email,
     )
-    _append_log(account_id, "原邮箱重认证完成，使用新鲜 AT 重试 begin 成功")
+    _append_log(account_id, "原账号重新登录完成，使用新鲜 AT 重试 begin 成功")
     return session, fresh_token, otp_after_ts, True
 
 

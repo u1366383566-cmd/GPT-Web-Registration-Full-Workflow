@@ -92,6 +92,7 @@ CPA_SAVE_CALLBACK_RECEIPT: bool = True
 # 接码平台（手机短信验证用）
 # SMS_PROVIDER:
 #   "grizzly" = GrizzlySMS，接口说明见 https://api.grizzlysms.com
+#   "smsbower"= SMSBower，接口说明见 https://smsbower.app/cn/api?page=client
 #   "l"       = 本地 L 取号服务，接口说明见 L_API.md
 #   "h"       = 本地 H 取号服务，接口说明见 H_API.md
 # ============================================================
@@ -105,8 +106,17 @@ SMS_API_BASE: str = "https://api.grizzlysms.com/stubs/handler_api.php"
 # 留空时 Codex 授权的手机验证步会失败；如不需要 Codex 自动授权，把 ENABLE_CODEX_AUTO=False。
 SMS_API_KEY: str = env_str("SMS_API_KEY", "")
 
-# 服务代码：OpenAI = "dr"
-SMS_SERVICE: str = "openai"
+# SMSBower 独立 API 配置（SMS_PROVIDER="smsbower" 时使用）
+SMSBOWER_API_BASE: str = "https://smsbower.page/stubs/handler_api.php"
+SMSBOWER_API_KEY: str = env_str("SMSBOWER_API_KEY", "")
+SMSBOWER_USE_V2: bool = False
+SMSBOWER_PROVIDER_IDS: str = ""
+SMSBOWER_EXCEPT_PROVIDER_IDS: str = ""
+SMSBOWER_PHONE_EXCEPTION: str = ""
+SMSBOWER_MIN_PRICE: str = ""
+
+# 服务代码：OpenAI (ChatGPT) = "dr"
+SMS_SERVICE: str = "dr"
 
 # 国家代码：葡萄牙 = "117" / 美国 = "187"
 SMS_COUNTRY: str = "10"
@@ -161,4 +171,4 @@ L_ADMIN_AUTH_CODE: str = env_str("L_ADMIN_AUTH_CODE", "")
 L_PHONE_PREFIX: str = ""
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_API_KEY': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str'})
+apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_PRICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_POLL_INTERVAL': 'int', 'SMS_REQUEST_TIMEOUT': 'int', 'SMS_API_KEY': 'str', 'SMSBOWER_API_BASE': 'str', 'SMSBOWER_API_KEY': 'str', 'SMSBOWER_USE_V2': 'bool', 'SMSBOWER_PROVIDER_IDS': 'str', 'SMSBOWER_EXCEPT_PROVIDER_IDS': 'str', 'SMSBOWER_PHONE_EXCEPTION': 'str', 'SMSBOWER_MIN_PRICE': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str'})

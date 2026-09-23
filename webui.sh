@@ -70,10 +70,24 @@ find_pids_by_port() {
 }
 
 get_python() {
-  if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
-    echo "$ROOT_DIR/.venv/bin/python"
+  local venv_python="$ROOT_DIR/.venv/bin/python"
+  if [[ -x "$venv_python" ]] && "$venv_python" -c 'import sys; print(sys.executable)' >/dev/null 2>&1; then
+    echo "$venv_python"
+  elif [[ -e "$venv_python" ]]; then
+    echo "检测到 .venv 存在，但虚拟环境中的 Python 已失效。" >&2
+    echo "请重新创建虚拟环境并安装依赖：" >&2
+    echo "  rm -rf .venv && python3 -m venv .venv" >&2
+    echo "  .venv/bin/python -m pip install -r requirements.txt" >&2
+    return 1
   elif command -v python3 >/dev/null 2>&1; then
-    command -v python3
+    local system_python
+    system_python="$(command -v python3)"
+    if "$system_python" -c 'import flask' >/dev/null 2>&1; then
+      echo "$system_python"
+    else
+      echo "未找到可用 Python 环境：系统 Python 缺少 Flask，请先创建 .venv 并安装 requirements.txt" >&2
+      return 1
+    fi
   else
     echo "未找到 Python：请先创建 .venv 或安装 python3" >&2
     return 1
@@ -110,7 +124,7 @@ cmd_start() {
   local old_pid py pid
   old_pid="$(read_pid)"
   if is_running "$old_pid"; then
-    echo "WebUI 已在运行：PID=$old_pid，地址：http://${HOST}:${PORT}"
+    echo "WebUI 已在运行：PID=${old_pid}，地址：http://${HOST}:${PORT}"
     return 0
   fi
   rm -f "$PID_FILE"
