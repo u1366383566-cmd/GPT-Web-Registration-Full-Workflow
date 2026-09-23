@@ -6238,6 +6238,17 @@ function renderConfigPlainFieldV2(f) {
     control = `<input type="number" step="0.1" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
   } else if (f.type === 'list_str_multiline') {
     control = `<textarea data-key="${attrEsc(f.key)}" placeholder="每行一条，可留空">${attrEsc((fv || []).join('\n'))}</textarea>`;
+  } else if (Array.isArray(f.options) && f.options.length) {
+    const raw = String(fv == null ? '' : fv).trim();
+    const known = f.options.some(o => String(o?.value || '') === raw);
+    if (raw && !known) {
+      control = `<input type="${f.secret ? 'password' : 'text'}" data-key="${attrEsc(f.key)}" value="${attrEsc(fv)}" placeholder="可留空" autocomplete="off" spellcheck="false">`;
+    } else {
+      const opts = [`<option value=""${raw ? '' : ' selected'}>（保持默认/未设置）</option>`]
+        .concat(f.options.map(o => `<option value="${attrEsc(o.value)}"${String(o.value) === raw ? ' selected' : ''}>${esc(o.label)}</option>`))
+        .join('');
+      control = `<select data-key="${attrEsc(f.key)}">${opts}</select>`;
+    }
   } else {
     const shown = isPlaceholderEmpty(fv) ? '' : fv;
     const inputType = f.secret ? 'password' : 'text';

@@ -355,7 +355,19 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "EMAIL_SOURCE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
-        "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,imap,cloudflare_domain,cloudflare,gptmail,mailnest,cloudmail,remail",
+        "label": "邮箱来源", "help": "注册用哪个邮箱池收验证码；也可手填多个，逗号分隔按顺序兜底",
+        "options": [
+            {"value": "remail", "label": "Remail 开放 API（remail.aishop6.com，自动下单并收码）"},
+            {"value": "mailcx", "label": "Mail.cx 临时邮箱（免费，域名易被 OpenAI 拉黑）"},
+            {"value": "outlook", "label": "Outlook 邮箱池（外购账号 + 取信服务）"},
+            {"value": "imap", "label": "通用 IMAP 邮箱池（导入自己的邮箱）"},
+            {"value": "generic_api", "label": "通用 API 取码邮箱（邮箱----取码地址）"},
+            {"value": "cloudflare_domain", "label": "Cloudflare 域名邮箱（转发 QQ 邮箱收信）"},
+            {"value": "cloudflare", "label": "Cloudflare Worker 临时邮箱"},
+            {"value": "gptmail", "label": "GPTMail 临时邮箱 API"},
+            {"value": "mailnest", "label": "MailNest/迈巢 临时邮箱 API"},
+            {"value": "cloudmail", "label": "CloudMail API"},
+        ],
     },
     {
         "key": "IMAP_MAILBOX", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
@@ -512,10 +524,18 @@ EDITABLE_FIELDS = [
     {
         "key": "REMAIL_SERVICE_MODE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
         "label": "Remail 服务模式", "help": "code=短效接码；purchase=长效购买（可重复收件，默认）",
+        "options": [
+            {"value": "purchase", "label": "purchase = 长效购买（已购库存，可重复收件，推荐）"},
+            {"value": "code", "label": "code = 短效接码（一次性验证码，用完即弃）"},
+        ],
     },
     {
         "key": "REMAIL_SUPPLY_POLICY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
         "label": "Remail 库存策略", "help": "private_first 优先自有库存；public_only 只使用公开库存（默认）",
+        "options": [
+            {"value": "private_first", "label": "private_first = 优先用自己购买的库存（买过号必选）"},
+            {"value": "public_only", "label": "public_only = 只用公开库存（每单现购，扣积分）"},
+        ],
     },
     {
         "key": "REMAIL_ORDER_WAIT_SECONDS", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
