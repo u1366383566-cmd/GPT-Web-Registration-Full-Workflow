@@ -66,6 +66,22 @@ class DelayedEmailAllocationTests(unittest.TestCase):
             ["find_input", "acquire_email", "type_email", "submit_email"],
         )
 
+    def test_roxy_accepts_verification_page_reached_during_slow_diagnostic(self):
+        """复现邮箱提交超时后，读取诊断 DOM 时才完成 OTP 跳转的竞态。"""
+        with patch.object(
+            roxy, "_current_email_submit_next_state", side_effect=[None, "otp"]
+        ), patch.object(roxy, "_type_email_address"), patch.object(
+            roxy, "_email_input_value_state",
+            side_effect=[{"inputs": [{"value": "slow@example.com"}]}, {"inputs": []}],
+        ), patch.object(roxy, "_submit_email_step"), patch.object(
+            roxy, "_wait_email_submit_next_state", return_value="unknown"
+        ), patch.object(roxy, "human_delay"):
+            result = roxy._submit_email_and_wait_next(
+                object(), "slow@example.com", attempts=3
+            )
+
+        self.assertEqual(result, "otp")
+
     def test_browser_use_finds_input_before_allocating_email(self):
         events = []
         email_input = object()

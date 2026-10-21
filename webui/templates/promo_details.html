@@ -1,0 +1,87 @@
+<style>
+  .promo-detail-btn {
+    display: inline-flex; align-items: center; gap: 5px; margin: 5px 0 0 6px;
+    height: 25px; padding: 0 9px; border: 1px solid #c7d8ff; border-radius: 7px;
+    color: #3568d4; background: linear-gradient(180deg, #f5f8ff, #eaf1ff);
+    box-shadow: 0 1px 2px rgba(40,85,170,.08); font: inherit; font-size: 12px;
+    font-weight: 600; cursor: pointer; transition: .15s ease;
+  }
+  .promo-detail-btn::before { content: '▣'; font-size: 11px; opacity: .8; }
+  .promo-detail-btn:hover { color: #fff; border-color: #4e7fe5; background: #4e7fe5; box-shadow: 0 3px 8px rgba(53,104,212,.25); transform: translateY(-1px); }
+  .promo-detail-btn:active { transform: translateY(0); }
+  #promoDetailsDialog {
+    width: min(720px, calc(100vw - 32px)); max-height: min(82vh, 760px); margin: auto;
+    overflow: hidden; border: 0; border-radius: 18px; padding: 0; color: #26334d;
+    background: #f7f9fd; box-shadow: 0 24px 80px rgba(25,43,77,.28);
+  }
+  #promoDetailsDialog::backdrop { background: rgba(15,27,52,.52); backdrop-filter: blur(3px); }
+  #promoDetailsDialog .promo-dialog-head { padding: 22px 26px 18px; color: #fff; background: linear-gradient(135deg, #3867d6, #5b7fe3 65%, #7897ef); }
+  #promoDetailsDialog .promo-dialog-title { display: flex; align-items: center; gap: 11px; }
+  #promoDetailsDialog .promo-dialog-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: rgba(255,255,255,.18); font-size: 19px; }
+  #promoDetailsDialog h3 { margin: 0; font-size: 19px; letter-spacing: .2px; }
+  #promoDetailsDialog .promo-dialog-subtitle { margin: 9px 0 0 47px; color: rgba(255,255,255,.82); font-size: 12px; }
+  #promoDetailsDialog .promo-dialog-close { width: 30px; height: 30px; border: 0; border-radius: 8px; color: #fff; background: rgba(255,255,255,.16); font-size: 19px; cursor: pointer; }
+  #promoDetailsDialog .promo-dialog-close:hover { background: rgba(255,255,255,.3); }
+  #promoDetailsContent { max-height: calc(min(82vh, 760px) - 120px); overflow: auto; padding: 18px 22px 24px; }
+  #promoDetailsContent::-webkit-scrollbar { width: 8px; }
+  #promoDetailsContent::-webkit-scrollbar-thumb { border-radius: 8px; background: #cbd5e8; }
+  #promoDetailsDialog section { margin: 0 0 14px; padding: 17px 18px; border: 1px solid #e2e8f3; border-radius: 13px; background: #fff; box-shadow: 0 3px 12px rgba(43,65,105,.05); overflow-wrap: anywhere; }
+  #promoDetailsDialog section:last-child { margin-bottom: 0; }
+  #promoDetailsDialog section h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 13px; color: #315cc4; font-size: 15px; }
+  #promoDetailsDialog section h4::before { content: ''; width: 4px; height: 16px; border-radius: 4px; background: #4e7fe5; }
+  #promoDetailsDialog .promo-field { display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 12px; margin: 8px 0; line-height: 1.5; font-size: 13px; }
+  #promoDetailsDialog .promo-label { color: #8793a8; }
+  #promoDetailsDialog .promo-value { color: #35435d; white-space: pre-wrap; }
+  #promoDetailsDialog details { margin-top: 15px; border-top: 1px solid #edf0f6; padding-top: 12px; }
+  #promoDetailsDialog summary { color: #5274c9; font-size: 12px; cursor: pointer; user-select: none; }
+  #promoDetailsDialog pre { max-height: 220px; margin: 10px 0 0; padding: 12px; overflow: auto; border-radius: 8px; color: #52617b; background: #f4f6fa; font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  @media (max-width: 560px) { #promoDetailsDialog .promo-field { grid-template-columns: 96px minmax(0, 1fr); gap: 8px; } #promoDetailsDialog .promo-dialog-head { padding: 18px; } #promoDetailsContent { padding: 14px; } }
+</style>
+<dialog id="promoDetailsDialog" aria-labelledby="promoDetailsTitle">
+  <div class="promo-dialog-head"><div class="promo-dialog-title"><span class="promo-dialog-icon">✦</span><h3 id="promoDetailsTitle">可用优惠详情</h3><form method="dialog" style="margin-left:auto"><button class="promo-dialog-close" type="submit" aria-label="关闭">×</button></form></div><p class="promo-dialog-subtitle">最近一次查套餐返回的活动信息，不代表已开通套餐</p></div>
+  <div id="promoDetailsContent"></div>
+</dialog>
+<script>
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-promo-details]');
+  if (!button) return;
+  let campaigns;
+  try { campaigns = JSON.parse(button.dataset.promoDetails); }
+  catch (_) { showToast('优惠详情数据无效，请重新查询套餐'); return; }
+  const content = document.getElementById('promoDetailsContent');
+  content.replaceChildren();
+  for (const [type, campaign] of Object.entries(campaigns)) {
+    const section = document.createElement('section');
+    const heading = document.createElement('h4');
+    heading.textContent = type;
+    section.appendChild(heading);
+    const meta = campaign.metadata || {};
+    const fields = [
+      ['活动 ID', campaign.id], ['标题', meta.title], ['说明', meta.summary],
+      ['套餐', meta.plan_name], ['优惠类型', meta.promotion_type_label || meta.promotion_type],
+      ['折扣比例', meta.discount?.percentage != null ? meta.discount.percentage + '%' : null],
+      ['优惠时长', meta.duration ? [meta.duration.num_periods, meta.duration.period].filter(v => v != null).join(' ') : null],
+      ['优惠结束后自动续费', meta.no_auto_renewal_at_discount_end === false ? '是' : meta.no_auto_renewal_at_discount_end === true ? '否' : null],
+      ['支付处理方', meta.processor],
+    ];
+    for (const [label, value] of fields) {
+      if (value == null || value === '') continue;
+      const line = document.createElement('div');
+      line.className = 'promo-field';
+      const labelNode = document.createElement('span'); labelNode.className = 'promo-label'; labelNode.textContent = label;
+      const valueNode = document.createElement('span'); valueNode.className = 'promo-value'; valueNode.textContent = value;
+      line.append(labelNode, valueNode);
+      section.appendChild(line);
+    }
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = '查看全部原始字段';
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(campaign, null, 2);
+    details.append(summary, pre);
+    section.appendChild(details);
+    content.appendChild(section);
+  }
+  document.getElementById('promoDetailsDialog').showModal();
+});
+</script>

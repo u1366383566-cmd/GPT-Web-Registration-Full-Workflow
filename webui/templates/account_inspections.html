@@ -1,0 +1,394 @@
+<style>
+  .inspection-dialog {
+    width: min(1240px, calc(100vw - 48px)); max-width: none; max-height: 88vh; max-height: 88dvh;
+    margin: auto; padding: 0; border: 1px solid var(--line, #d9e2ec); border-radius: 16px;
+    background: var(--surface, #fff); color: var(--text, #172033);
+    box-shadow: 0 24px 80px rgba(15, 23, 42, .2); font: inherit;
+  }
+  .inspection-dialog::backdrop { background: rgba(15, 23, 42, .38); backdrop-filter: blur(3px); }
+  .inspection-dialog[open] { display: flex; flex-direction: column; }
+  .inspection-dialog--start { width: min(480px, calc(100vw - 32px)); }
+  .inspection-dialog form { margin: 0; overflow: auto; }
+  .inspection-dialog .inspection-header { display: flex; align-items: center; gap: 12px; padding: 22px 24px; border-bottom: 1px solid var(--line, #d9e2ec); }
+  .inspection-dialog .inspection-heading { flex: 1; min-width: 0; }
+  .inspection-dialog .inspection-heading h3 { margin: 0; font-size: 18px; font-weight: 750; line-height: 1.5; color: var(--text, #172033); }
+  .inspection-dialog .inspection-heading p { margin: 3px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted, #667085); }
+  .inspection-icon { display: grid; place-items: center; flex: 0 0 40px; height: 40px; border-radius: 12px; background: #eff6ff; color: #2563eb; }
+  .inspection-dialog .inspection-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 0 14px; border: 1px solid var(--line, #d9e2ec); border-radius: 8px; background: var(--surface, #fff); color: var(--text, #172033); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .inspection-dialog .inspection-btn:hover:not(:disabled) { background: var(--soft, #f7f9fc); border-color: #aebed0; }
+  .inspection-dialog .inspection-btn:focus-visible, .inspection-dialog input:focus-visible, .inspection-dialog summary:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+  .inspection-dialog .inspection-btn:disabled { background: #f8fafc; border-color: #e2e8f0; color: #98a2b3; cursor: not-allowed; }
+  .inspection-dialog .inspection-btn--primary { background: var(--blue, #2563eb); border-color: var(--blue, #2563eb); color: #fff; }
+  .inspection-dialog .inspection-btn--primary:hover:not(:disabled) { background: #1d4ed8; border-color: #1d4ed8; }
+  .inspection-dialog .inspection-close { width: 36px; padding: 0; color: var(--muted, #667085); font-size: 22px; font-weight: 400; }
+  .inspection-body { padding: 20px 24px; overflow: auto; min-height: 0; }
+  .inspection-notice { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 16px; padding: 12px 16px; border: 1px solid #dbeafe; border-radius: 10px; background: #f4f8ff; color: #475569; font-size: 12px; line-height: 1.7; margin-bottom: 18px; }
+  .inspection-notice strong { color: #1d4ed8; font-weight: 600; }
+  .inspection-notice details { flex-basis: 100%; }
+  .inspection-notice summary { cursor: pointer; color: #64748b; width: fit-content; }
+  .inspection-notice details p { margin: 6px 0 0; }
+  .inspection-table-wrap { overflow-x: auto; border: 1px solid var(--line, #d9e2ec); border-radius: 10px; }
+  .inspection-dialog .inspection-table { width: 100%; min-width: 1050px; border-collapse: collapse; table-layout: auto; font-size: 13px; text-align: left; }
+  .inspection-dialog .inspection-table th { padding: 12px 14px; background: var(--soft, #f7f9fc); color: #64748b; font-weight: 600; font-size: 12px; white-space: nowrap; border-bottom: 1px solid var(--line, #d9e2ec); }
+  .inspection-dialog .inspection-table td { padding: 16px 14px; border-bottom: 1px solid #edf1f5; white-space: nowrap; color: var(--text, #172033); background: var(--surface, #fff); }
+  .inspection-dialog .inspection-table tbody tr:last-child td { border-bottom: 0; }
+  .inspection-dialog .inspection-table tbody tr:hover td { background: #fafcff; }
+  .inspection-dialog .inspection-sub { display: block; margin-top: 4px; color: #8492a6; font-size: 11px; }
+  .inspection-dialog .inspection-number { font-variant-numeric: tabular-nums; font-weight: 650; }
+  .inspection-dialog .inspection-pill { display: inline-flex; padding: 4px 9px; border-radius: 6px; background: #f1f5f9; color: #64748b; font-size: 12px; font-weight: 600; line-height: 1.4; }
+  .inspection-dialog .inspection-pill--running, .inspection-dialog .inspection-pill--queued { background: #eff6ff; color: #2563eb; }
+  .inspection-dialog .inspection-pill--completed { background: #edf9f0; color: #16803c; }
+  .inspection-dialog .inspection-pill--failed { background: #fff1f2; color: #be123c; }
+  .inspection-dialog .inspection-pill--interrupted { background: #fff7ed; color: #b45309; }
+  .inspection-dialog .inspection-scope { background: #f5f3ff; color: #6d5ab1; }
+  .inspection-dialog .inspection-success { color: #16803c; }
+  .inspection-dialog .inspection-failure { color: #c2413a; }
+  .inspection-progress { width: 100px; height: 4px; margin-top: 8px; border-radius: 4px; overflow: hidden; background: #eaf0f6; }
+  .inspection-progress span { display: block; height: 100%; border-radius: inherit; background: #3b82f6; }
+  .inspection-dialog .inspection-table .inspection-error td { white-space: normal; overflow-wrap: anywhere; background: #fffbeb; color: #92400e; font-size: 12px; padding: 10px 14px; }
+  .inspection-dialog .inspection-failure-table { min-width: 760px; }
+  .inspection-dialog .inspection-failure-table .inspection-email { white-space: normal; overflow-wrap: anywhere; min-width: 160px; max-width: 240px; }
+  .inspection-scroll-hint { display: none; }
+  .inspection-dialog .inspection-failure-table .inspection-reason { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 240px; max-width: 520px; }
+  .inspection-dialog .inspection-detail-link { display: block; margin-top: 6px; min-height: 28px; padding: 2px 8px; color: #b42318; font-size: 12px; }
+  .inspection-empty { min-height: 190px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 28px 16px; text-align: center; color: #94a3b8; }
+  .inspection-empty strong { color: #475569; font-size: 14px; font-weight: 600; }
+  .inspection-empty p { margin: 0; font-size: 12px; line-height: 1.7; }
+  .inspection-dialog .inspection-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 24px; border-top: 1px solid var(--line, #d9e2ec); background: var(--soft, #f7f9fc); font-size: 12px; color: var(--muted, #667085); }
+  .inspection-footer-actions { display: flex; align-items: center; gap: 8px; }
+  .inspection-dialog .inspection-field { display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+  .inspection-dialog #inspectionWorkers { width: 100%; margin: 0; min-height: 42px; border: 1px solid var(--line, #d9e2ec); border-radius: 8px; background: var(--surface, #fff); color: var(--text, #172033); font: inherit; padding: 8px 12px; }
+  .inspection-hint { color: var(--muted, #667085); font-size: 12px; line-height: 1.7; margin: 8px 0 0; }
+  @media (max-width: 640px) {
+    .inspection-dialog { width: calc(100vw - 24px); border-radius: 12px; max-height: 92vh; max-height: 92dvh; }
+    .inspection-dialog .inspection-header { padding: 16px; gap: 8px; }
+    .inspection-icon { display: none; }
+    .inspection-scroll-hint { display: block; margin: 0 0 10px; font-size: 12px; color: var(--muted, #667085); }
+    .inspection-dialog .inspection-heading h3 { font-size: 16px; }
+    .inspection-body { padding: 16px; }
+    .inspection-dialog .inspection-footer { padding: 12px 16px; flex-wrap: wrap; }
+    .inspection-footer-actions { margin-left: auto; }
+  }
+</style>
+<dialog id="inspectionStartDialog" class="inspection-dialog inspection-dialog--start" aria-labelledby="inspectionStartTitle">
+  <form onsubmit="submitAccountInspection(event)">
+    <div class="inspection-header">
+      <div class="inspection-heading"><h3 id="inspectionStartTitle">启动账号巡检</h3><p>本地检查 AT，按需查活并更新套餐</p></div>
+      <button class="inspection-btn inspection-close" type="button" aria-label="关闭启动巡检弹窗" onclick="document.getElementById('inspectionStartDialog').close()">×</button>
+    </div>
+    <div class="inspection-body">
+      <div class="inspection-notice"><span>巡检范围：<strong id="inspectionScopeLabel">未归档账号</strong></span><span>该范围内全部账号，不受其他筛选条件影响。</span></div>
+      <label class="inspection-field" for="inspectionWorkers">并发线程数</label>
+      <input id="inspectionWorkers" name="workers" type="number" min="1" max="32" step="1" value="3" required aria-describedby="inspectionWorkersHint">
+      <p id="inspectionWorkersHint" class="inspection-hint">支持 1–32 个线程，默认 3 个。每个账号在本次任务中只执行一次；已有任务未结束时不能重复启动。</p>
+      <p class="inspection-hint">已废账号直接跳过；AT 失效 → 自动查活 → 同会话查套餐</p>
+    </div>
+    <div class="inspection-footer"><span>执行结果将保存在巡检历史中</span><div class="inspection-footer-actions">
+      <button class="inspection-btn" type="button" onclick="document.getElementById('inspectionStartDialog').close()">取消</button>
+      <button class="inspection-btn inspection-btn--primary" id="btnConfirmInspection" type="submit">开始巡检</button>
+    </div></div>
+  </form>
+</dialog>
+<dialog id="inspectionHistoryDialog" class="inspection-dialog" aria-labelledby="inspectionHistoryTitle">
+  <div class="inspection-header">
+    <span class="inspection-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3"/><rect x="9" y="2" width="6" height="6" rx="2"/><path d="m8 14 3 3 5-6"/></svg></span>
+    <div class="inspection-heading"><h3 id="inspectionHistoryTitle">账号巡检历史</h3><p>查看任务进度与结果 · 每 5 秒自动更新</p></div>
+    <button class="inspection-btn" id="inspectionRefresh" type="button" onclick="refreshInspectionHistory()">刷新</button>
+    <button class="inspection-btn inspection-close" type="button" aria-label="关闭巡检历史" onclick="document.getElementById('inspectionHistoryDialog').close()">×</button>
+  </div>
+  <div class="inspection-body">
+    <div class="inspection-notice"><strong>本地检查 → 失效查活 → 同会话查套餐</strong><span>范围跟随启动时的归档筛选，不受其他列表筛选影响。</span>
+      <details><summary>统计口径与巡检规则</summary><p>仅本地解析 JWT exp；过期、缺失或无法解析的 AT 视为失效。查活成功后复用同一会话自动查套餐，巡检不会重复查询；入队被拒绝也计入对应失败数。执行前已删除或已标记为已废的账号计为跳过，不计为 AT 失效；已废账号保存到失败详情，但不计为实际查活失败。</p></details>
+    </div>
+    <div id="inspectionHistoryContent" aria-live="polite"><div class="inspection-empty"><strong>正在加载巡检记录…</strong><p>请稍候</p></div></div>
+  </div>
+  <div class="inspection-footer"><span id="inspectionPageLabel">正在读取记录…</span><div class="inspection-footer-actions">
+    <button class="inspection-btn" id="inspectionPrev" type="button" onclick="changeInspectionPage(-1)" disabled>上一页</button>
+    <button class="inspection-btn" id="inspectionNext" type="button" onclick="changeInspectionPage(1)" disabled>下一页</button>
+  </div></div>
+</dialog>
+<dialog id="inspectionFailuresDialog" class="inspection-dialog" aria-labelledby="inspectionFailuresTitle">
+  <div class="inspection-header">
+    <div class="inspection-heading"><h3 id="inspectionFailuresTitle">查活失败详情</h3><p id="inspectionFailuresSubtitle">按巡检任务保存，不受后续查活和账号删除影响</p></div>
+    <button class="inspection-btn" id="inspectionFailuresRefresh" type="button" onclick="refreshInspectionFailures()">刷新</button>
+    <button class="inspection-btn inspection-close" type="button" aria-label="关闭失败详情" onclick="document.getElementById('inspectionFailuresDialog').close()">×</button>
+  </div>
+  <div class="inspection-body" id="inspectionFailuresContent" aria-live="polite"></div>
+  <div class="inspection-footer"><span id="inspectionFailuresPageLabel"></span><div class="inspection-footer-actions">
+    <button class="inspection-btn" id="inspectionFailuresPrev" type="button" onclick="changeInspectionFailuresPage(-1)" disabled>上一页</button>
+    <button class="inspection-btn" id="inspectionFailuresNext" type="button" onclick="changeInspectionFailuresPage(1)" disabled>下一页</button>
+  </div></div>
+</dialog>
+<script>
+let inspectionArchived = '0';
+function inspectionScopeName(archived) {
+  return archived === 'only' ? '已归档' : (archived === 'all' ? '全部账号' : '未归档');
+}
+let deletingDeactivatedAccounts = false;
+async function deleteDeactivatedAccounts() {
+  if (deletingDeactivatedAccounts) return;
+  const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
+  const scope = inspectionScopeName(archived);
+  if (!confirm(`确定删除「${scope}」范围内全部已废账号吗？\n\n不限当前页，不受搜索或其他筛选条件影响。仅删除本地已废账号及关联 Agent 凭证，保留巡检历史。此操作不可撤销。`)) return;
+  deletingDeactivatedAccounts = true;
+  const button = document.getElementById('btnDeleteDeactivatedAccounts');
+  button.disabled = true;
+  button.textContent = '删除中…';
+  try {
+    const result = await inspectionRequest('/api/accounts/delete-deactivated', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({archived}),
+    });
+    // 清理选择，避免跨页选择残留已删除的账号 ID。
+    ACCOUNT_SELECTED.clear();
+    loadAccounts(); loadSummary();
+    showToast(`已删除 ${inspectionCount(result.deleted_count)} 个已废账号`);
+  } catch (error) {
+    showToast('未能确认删除结果，请刷新账号列表核实：' + error.message);
+    loadAccounts(); loadSummary();
+  } finally {
+    deletingDeactivatedAccounts = false;
+    button.disabled = false;
+    button.textContent = '一键删除已废';
+  }
+}
+let inspectionPage = 1;
+let inspectionLoading = false;
+let inspectionStateVersion = 0;
+let inspectionStarting = false;
+let inspectionActive = false;
+let inspectionUncertain = false;
+let inspectionRefreshPending = false;
+async function inspectionRequest(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    return await api(url, {...options, signal: controller.signal});
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('请求超时，请刷新确认任务状态');
+    throw error;
+  } finally { clearTimeout(timeout); }
+}
+function inspectionButtonState() {
+  const btn = document.getElementById('btnStartInspection');
+  if (btn) {
+    btn.disabled = inspectionStarting || inspectionActive || inspectionUncertain;
+    btn.textContent = inspectionUncertain ? '状态待确认…' : (inspectionActive ? '巡检进行中…' : (inspectionStarting ? '正在启动…' : '一键巡检'));
+  }
+  document.getElementById('btnConfirmInspection').disabled = inspectionStarting || inspectionActive || inspectionUncertain;
+}
+function startAccountInspection() {
+  if (inspectionStarting || inspectionActive || inspectionUncertain) return;
+  inspectionArchived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
+  document.getElementById('inspectionScopeLabel').textContent = inspectionScopeName(inspectionArchived);
+  document.getElementById('inspectionStartDialog').showModal();
+}
+async function submitAccountInspection(event) {
+  event.preventDefault();
+  if (inspectionStarting || inspectionActive || inspectionUncertain) return;
+  const workers = Number(document.getElementById('inspectionWorkers').value);
+  if (!Number.isInteger(workers) || workers < 1 || workers > 32) {
+    showToast('线程数必须为 1–32 的整数');
+    return;
+  }
+  inspectionStateVersion++; // 丢弃启动前发出的旧轮询结果，避免错误解锁按钮。
+  inspectionStarting = true;
+  inspectionButtonState();
+  try {
+    await inspectionRequest('/api/accounts/inspections', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({workers, archived:inspectionArchived})});
+    inspectionStateVersion++; // 启动期间发出的 GET 也可能尚未看到新任务。
+    document.getElementById('inspectionStartDialog').close();
+    inspectionActive = true;
+    inspectionPage = 1;
+    document.getElementById('inspectionHistoryDialog').showModal();
+    showToast('巡检已启动');
+  } catch (e) {
+    // 请求超时/断连不代表服务端没有创建任务；先查明状态，不能盲目再次提交。
+    inspectionUncertain = true;
+    showToast('未能确认启动结果：' + e.message + '。正在查询任务状态。');
+  }
+  finally {
+    inspectionStateVersion++; // 成功或失败都作废提交期间的旧读取快照。
+    inspectionStarting = false;
+    inspectionButtonState();
+    refreshInspectionHistory();
+  }
+}
+function openInspectionHistory() {
+  inspectionPage = 1;
+  document.getElementById('inspectionHistoryDialog').showModal();
+  refreshInspectionHistory();
+}
+function changeInspectionPage(delta) {
+  if (inspectionLoading) return;
+  inspectionPage = Math.max(1, inspectionPage + delta);
+  refreshInspectionHistory();
+}
+let inspectionHasHistory = false;
+function inspectionCount(value) {
+  const count = Number(value);
+  return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+}
+function inspectionTime(value) {
+  if (!value) return '—';
+  const parts = String(value).replace('T', ' ').split(' ');
+  return `${esc(parts[0])}<span class="inspection-sub">${esc(parts.slice(1).join(' '))}</span>`;
+}
+function inspectionResultCounts(success, failed) {
+  const good = inspectionCount(success), bad = inspectionCount(failed);
+  return `<span class="inspection-number inspection-success">${good}</span> / <span class="inspection-number ${bad ? 'inspection-failure' : ''}">${bad}</span><span class="inspection-sub">成功 / 失败</span>`;
+}
+// 同页刷新保留阅读位置，内容未变化时不重建 DOM；翻页则回到起点。
+const inspectionRenderedViews = new WeakMap();
+function renderInspectionContent(content, markup, viewKey) {
+  const sameView = inspectionRenderedViews.get(content) === viewKey;
+  if (sameView && content.innerHTML === markup) return;
+  const body = content.closest('.inspection-body') || content;
+  const previousWrap = content.querySelector('.inspection-table-wrap');
+  const restoreFocus = previousWrap && document.activeElement === previousWrap;
+  const top = sameView ? body.scrollTop : 0;
+  const left = sameView && previousWrap ? previousWrap.scrollLeft : 0;
+  content.innerHTML = markup;
+  const wrap = content.querySelector('.inspection-table-wrap');
+  if (wrap) {
+    wrap.scrollLeft = left;
+    if (restoreFocus) wrap.focus({preventScroll: true});
+  }
+  body.scrollTop = top;
+  inspectionRenderedViews.set(content, viewKey);
+}
+async function refreshInspectionHistory() {
+  if (inspectionLoading) { inspectionRefreshPending = true; return; }
+  inspectionLoading = true;
+  const refreshButton = document.getElementById('inspectionRefresh');
+  refreshButton.disabled = true;
+  refreshButton.textContent = '刷新中…';
+  const page = inspectionPage;
+  const version = inspectionStateVersion;
+  try {
+    const data = await inspectionRequest('/api/accounts/inspections?page=' + page);
+    if (version !== inspectionStateVersion || page !== inspectionPage) return;
+    const wasActive = inspectionActive;
+    inspectionActive = !!data.active;
+    inspectionUncertain = false;
+    inspectionButtonState();
+    if (wasActive && !inspectionActive) { loadAccounts(); loadSummary(); }
+    const names = {queued:'排队中',running:'进行中',completed:'已完成',failed:'失败',interrupted:'已中断'};
+    const heads = ['任务', '账号范围', '开始 / 结束时间', '状态', '线程', '检查进度', 'AT 失效', '查活结果', '套餐结果'];
+    const rows = data.items.map(r => {
+      const checked = inspectionCount(r.checked_count), total = inspectionCount(r.total_count), skipped = inspectionCount(r.skipped_count);
+      const progress = total ? Math.min(100, Math.round((checked + skipped) / total * 100)) : (r.status === 'completed' ? 100 : 0);
+      const statusClass = Object.prototype.hasOwnProperty.call(names, r.status) ? r.status : 'unknown';
+      const cells = [
+        `<span class="inspection-number">#${esc(r.id)}</span>`,
+        `<span class="inspection-pill inspection-scope">${inspectionScopeName(r.archived || '0')}</span>`,
+        `${inspectionTime(r.created_at)}<span class="inspection-sub">结束：${esc(r.finished_at ? String(r.finished_at).replace('T', ' ') : '—')}</span>`,
+        `<span class="inspection-pill inspection-pill--${statusClass}">${esc(names[r.status] || r.status)}</span>`,
+        `<span class="inspection-number">${inspectionCount(r.workers) || 1}</span>`,
+        `<span class="inspection-number">${checked} / ${total}</span><div class="inspection-progress" aria-hidden="true"><span style="width:${progress}%"></span></div><span class="inspection-sub">跳过 ${skipped} 个（已废 ${inspectionCount(r.deactivated_skipped_count)}）</span>`,
+        `<span class="inspection-number ${inspectionCount(r.invalid_count) ? 'inspection-failure' : ''}">${inspectionCount(r.invalid_count)}</span>`,
+        inspectionResultCounts(r.live_success_count, r.live_failed_count) +
+          ((inspectionCount(r.live_failed_count) + inspectionCount(r.deactivated_skipped_count)) && Number.isSafeInteger(Number(r.id)) && Number(r.id) > 0
+            ? `<button class="inspection-btn inspection-detail-link" type="button" onclick="openInspectionFailures(${Number(r.id)})">失败详情（${inspectionCount(r.live_failed_count) + inspectionCount(r.deactivated_skipped_count)}）</button>` : ''),
+        inspectionResultCounts(r.plan_success_count, r.plan_failed_count),
+      ];
+      return `<tr>${cells.map(c => `<td>${c}</td>`).join('')}</tr>` +
+        (r.error ? `<tr class="inspection-error"><td colspan="9">任务提示：${esc(r.error)}</td></tr>` : '');
+    }).join('');
+    renderInspectionContent(document.getElementById('inspectionHistoryContent'), rows
+      ? `<div class="inspection-table-wrap"><table class="inspection-table"><caption style="position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)">账号巡检任务记录及各阶段统计</caption><thead><tr>${heads.map(h=>`<th scope="col">${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`
+      : '<div class="inspection-empty"><svg aria-hidden="true" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="M9 8h6M9 12h6M9 16h3"/></svg><strong>暂无巡检记录</strong><p>在账号列表点击「一键巡检」，完成后可在这里查看结果。</p></div>', `history:${page}`);
+    inspectionHasHistory = true;
+    document.getElementById('inspectionPageLabel').textContent = `共 ${data.total} 条记录 · 第 ${inspectionPage} / ${Math.max(1, Math.ceil(data.total / 20))} 页`;
+    document.getElementById('inspectionPrev').disabled = inspectionPage <= 1;
+    document.getElementById('inspectionNext').disabled = inspectionPage * 20 >= data.total;
+  } catch(e) {
+    if (!inspectionHasHistory) {
+      document.getElementById('inspectionHistoryContent').innerHTML = '<div class="inspection-empty"><strong>暂时无法读取巡检记录</strong><p>请点击右上角「刷新」重试。</p></div>';
+      document.getElementById('inspectionPageLabel').textContent = '读取失败';
+    }
+    if (document.getElementById('inspectionHistoryDialog').open) showToast('读取巡检历史失败：' + e.message);
+  } finally {
+    inspectionLoading = false;
+    refreshButton.disabled = false;
+    refreshButton.textContent = '刷新';
+    if (inspectionRefreshPending) {
+      inspectionRefreshPending = false;
+      void refreshInspectionHistory();
+    }
+  }
+}
+let inspectionFailuresTask = null;
+let inspectionFailuresPage = 1;
+let inspectionFailuresTotal = 0;
+let inspectionFailuresLoading = false;
+let inspectionFailuresPending = false;
+let inspectionFailuresVersion = 0;
+function openInspectionFailures(taskId) {
+  if (!Number.isSafeInteger(taskId) || taskId <= 0) return;
+  inspectionFailuresTask = taskId;
+  inspectionFailuresPage = 1;
+  inspectionFailuresTotal = 0;
+  inspectionFailuresVersion++;
+  document.getElementById('inspectionFailuresSubtitle').textContent = '按巡检任务保存，不受后续查活和账号删除影响';
+  document.getElementById('inspectionFailuresPrev').disabled = true;
+  document.getElementById('inspectionFailuresNext').disabled = true;
+  document.getElementById('inspectionFailuresTitle').textContent = `巡检 #${taskId} · 查活失败详情`;
+  document.getElementById('inspectionFailuresContent').innerHTML = '<div class="inspection-empty"><strong>正在加载失败记录…</strong></div>';
+  document.getElementById('inspectionFailuresPageLabel').textContent = '正在读取记录…';
+  document.getElementById('inspectionFailuresDialog').showModal();
+  refreshInspectionFailures();
+}
+function changeInspectionFailuresPage(delta) {
+  if (inspectionFailuresLoading) return;
+  inspectionFailuresPage = Math.max(1, inspectionFailuresPage + delta);
+  refreshInspectionFailures();
+}
+async function refreshInspectionFailures() {
+  if (inspectionFailuresTask === null) return;
+  if (inspectionFailuresLoading) { inspectionFailuresPending = true; return; }
+  inspectionFailuresLoading = true;
+  const taskId = inspectionFailuresTask, page = inspectionFailuresPage, version = inspectionFailuresVersion;
+  const refresh = document.getElementById('inspectionFailuresRefresh');
+  refresh.disabled = true;
+  document.getElementById('inspectionFailuresPrev').disabled = true;
+  document.getElementById('inspectionFailuresNext').disabled = true;
+  try {
+    const data = await inspectionRequest(`/api/accounts/inspections/${taskId}/failures?page=${page}`);
+    if (version !== inspectionFailuresVersion || taskId !== inspectionFailuresTask || page !== inspectionFailuresPage) return;
+    const content = document.getElementById('inspectionFailuresContent');
+    inspectionFailuresTotal = inspectionCount(data.total);
+    document.getElementById('inspectionFailuresSubtitle').textContent = `${inspectionScopeName(data.task.archived || '0')} · 含已废跳过，原因按本次任务保存，每 5 秒自动更新`;
+    let markup;
+    if (!data.details_available) {
+      markup = '<div class="inspection-empty"><strong>该历史任务未保存失败明细</strong><p>旧任务仅保留汇总，无法还原当时的失败原因。新增巡检会保存失败详情。</p></div>';
+    } else if (!data.items.length) {
+      markup = '<div class="inspection-empty"><strong>暂无查活失败或已废跳过记录</strong><p>任务执行期间，失败记录将在处理完成后显示。</p></div>';
+    } else {
+      const statuses = {deactivated_skipped:'已废跳过', failed:'查活失败', deactivated:'账号已废', rejected:'未能入队', error:'执行异常'};
+      const rows = data.items.map(r => `<tr><td>#${esc(r.account_id)}</td><td class="inspection-email">${esc(r.email)}</td><td>${esc(statuses[r.status] || r.status)}</td><td>${inspectionTime(r.failed_at)}</td><td class="inspection-reason">${esc(r.error)}</td></tr>`).join('');
+      markup = `<p class="inspection-scroll-hint">左右滑动表格查看完整失败原因</p><div class="inspection-table-wrap" tabindex="0" role="region" aria-label="查活失败明细，可左右滚动"><table class="inspection-table inspection-failure-table"><thead><tr><th scope="col">账号 ID</th><th scope="col">账号邮箱</th><th scope="col">失败类型</th><th scope="col">记录时间</th><th scope="col">失败原因</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    }
+    renderInspectionContent(content, markup, `failures:${taskId}:${page}`);
+    document.getElementById('inspectionFailuresPageLabel').textContent = `共 ${inspectionFailuresTotal} 条失败记录 · 第 ${page} / ${Math.max(1, Math.ceil(inspectionFailuresTotal / 20))} 页`;
+  } catch (error) {
+    if (version !== inspectionFailuresVersion || taskId !== inspectionFailuresTask || page !== inspectionFailuresPage) return;
+    document.getElementById('inspectionFailuresContent').innerHTML = '<div class="inspection-empty"><strong>暂时无法读取失败详情</strong><p>请点击刷新重试。</p></div>';
+    document.getElementById('inspectionFailuresPageLabel').textContent = '读取失败';
+    if (document.getElementById('inspectionFailuresDialog').open) showToast('读取失败详情失败：' + error.message);
+  } finally {
+    inspectionFailuresLoading = false;
+    refresh.disabled = false;
+    document.getElementById('inspectionFailuresPrev').disabled = inspectionFailuresPage <= 1;
+    document.getElementById('inspectionFailuresNext').disabled = inspectionFailuresPage * 20 >= inspectionFailuresTotal;
+    if (inspectionFailuresPending) {
+      inspectionFailuresPending = false;
+      void refreshInspectionFailures();
+    }
+  }
+}
+refreshInspectionHistory();
+setInterval(() => {
+  if (!document.hidden && document.getElementById('inspectionFailuresDialog').open) refreshInspectionFailures();
+  if (!document.hidden && (document.getElementById('inspectionHistoryDialog').open || !document.getElementById('tab-accounts').classList.contains('hidden'))) refreshInspectionHistory();
+}, 5000);
+</script>

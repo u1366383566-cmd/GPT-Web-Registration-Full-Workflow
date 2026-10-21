@@ -14,7 +14,7 @@ from config.env_loader import env_str, apply_env_overrides
 # False: 走人工输入邮箱 + 人工填 OTP 的流程
 USE_EMAIL_SERVICE = False
 
-# 可选值（也可以用英文逗号配置多个，按顺序兜底，例如 "outlook,generic_api,mailnest,remail"）：
+# 可选值（也可以用英文逗号配置多个，按顺序兜底，例如 "outlook,generic_api,mailnest,remail,xigua"）：
 #   "outlook"           — 外购 Outlook 账号池 + mail.chatai.codes 远端取信
 #   "cloudflare_domain" — Cloudflare 域名邮箱（转发到 QQ 邮箱），通过 IMAP 取信
 #   "cloudflare" — Cloudflare Worker 临时邮箱（cloudflare_temp_email），API 创建并取码
@@ -24,6 +24,8 @@ USE_EMAIL_SERVICE = False
 #   "mailnest"          — MailNest/迈巢临时邮箱 API（运行时购买邮箱并自动收码）
 #   "cloudmail"         — CloudMail/Cloud Mail API（自动从平台获取域名并随机生成邮箱）
 #   "remail"            — Remail 开放 API（按项目下单并自动收取验证码）
+#   "mailcode"          — 域名邮箱 MailCode（幂等购买、准备取码通道、按游标收码）
+#   "xigua"             — 西瓜邮箱接码平台（按项目下单并自动收取验证码）
 EMAIL_SOURCE = "outlook,generic_api,mailnest"
 
 
@@ -54,11 +56,13 @@ OTP_MAX_WAIT = 90
 OTP_SETTLE_SECONDS = 5
 
 # 通用 API 取码专用代理；不读取代理池，也不套用代理池上游链式。
-# 你的本地接口代理直接填写 http://127.0.0.1:7897；留空则直连。
-GENERIC_API_PROXY: str = "http://127.0.0.1:7897"
+# 需要时填写例如 http://127.0.0.1:7897；留空则直连。
+GENERIC_API_PROXY: str = ""
 
 # 通用 IMAP 邮箱默认收件箱目录；服务器、端口和凭证随邮箱素材导入。
 IMAP_MAILBOX = "INBOX"
+# 单次 IMAP 网络操作超时；失败后在 OTP 总等待预算内重新连接。
+IMAP_SOCKET_TIMEOUT = 10
 
 
 # ============================================================
@@ -194,5 +198,23 @@ REMAIL_ORDER_WAIT_SECONDS = 30
 # Remail HTTP 请求超时。
 REMAIL_REQUEST_TIMEOUT = 20
 
+# ============================================================
+# 西瓜邮箱接码平台：https://xigua.dasiqo.com/
+# ============================================================
+XIGUA_API_BASE = "https://xigua.dasiqo.com"
+XIGUA_API_KEY = env_str("XIGUA_API_KEY", "")
+XIGUA_PROJECT_SLUG = "openai"
+XIGUA_OFFER_ID = "off_79b957291b6eae5f53f2abd04ebda998"
+XIGUA_REQUEST_TIMEOUT = 20
+XIGUA_POLL_ATTEMPTS = 10
+XIGUA_POLL_INTERVAL = 5
+
+# 域名邮箱 MailCode（固定官网地址，不接受 .env 覆盖）
+MAILCODE_API_BASE = "https://mailcode.bzb.qzz.io"
+MAILCODE_API_KEY = env_str("MAILCODE_API_KEY", "")
+MAILCODE_PRODUCT_ID = "product_a3783a0ead074b4091631b9ad04153f9"
+MAILCODE_REQUEST_TIMEOUT = 20
+MAILCODE_CHANNEL_WAIT_SECONDS = 60
+
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'OTP_SETTLE_SECONDS': 'int', 'GENERIC_API_PROXY': 'str', 'EMAIL_SOURCE': 'str', 'IMAP_MAILBOX': 'str', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'GPTMAIL_API_KEY': 'str', 'OUTLOOK_FETCH_MODE': 'str', 'MAIL_NEST_API_KEY': 'str', 'MAIL_NEST_PROJECT_CODE': 'str', 'MAILCX_API_TOKEN': 'str', 'MAILCX_API_BASE': 'str', 'MAILCX_DOMAIN': 'str', 'MAILCX_RANDOM_LOCAL_LENGTH': 'int', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDMAIL_API_BASE': 'str', 'CLOUDMAIL_ADMIN_EMAIL': 'str', 'CLOUDMAIL_PASSWORD': 'str', 'CLOUDMAIL_TOKEN_PATH': 'str', 'CLOUDMAIL_AUTH_TOKEN': 'str', 'CLOUDMAIL_DOMAINS': 'list_str_multiline', 'CLOUDMAIL_AUTO_ADD_USER': 'bool', 'CLOUDMAIL_RANDOM_LOCAL_LENGTH': 'int', 'REMAIL_API_BASE': 'str', 'REMAIL_API_KEY': 'str', 'REMAIL_PROJECT_ID': 'int', 'REMAIL_EMAIL_SUFFIX': 'str', 'REMAIL_SERVICE_MODE': 'str', 'REMAIL_SUPPLY_POLICY': 'str', 'REMAIL_ORDER_WAIT_SECONDS': 'int', 'REMAIL_REQUEST_TIMEOUT': 'int'})
+apply_env_overrides(globals(), {'MAILCODE_API_KEY': 'str', 'MAILCODE_PRODUCT_ID': 'str', 'MAILCODE_REQUEST_TIMEOUT': 'int', 'MAILCODE_CHANNEL_WAIT_SECONDS': 'int', 'USE_EMAIL_SERVICE': 'bool', 'OTP_MAX_WAIT': 'int', 'OTP_POLL_INTERVAL': 'int', 'OTP_SETTLE_SECONDS': 'int', 'GENERIC_API_PROXY': 'str', 'EMAIL_SOURCE': 'str', 'IMAP_MAILBOX': 'str', 'IMAP_SOCKET_TIMEOUT': 'int', 'EMAIL_DOMAIN': 'str', 'QQ_EMAIL': 'str', 'QQ_IMAP_PASSWORD': 'str', 'GPTMAIL_API_KEY': 'str', 'OUTLOOK_FETCH_MODE': 'str', 'MAIL_NEST_API_KEY': 'str', 'MAIL_NEST_PROJECT_CODE': 'str', 'MAILCX_API_TOKEN': 'str', 'MAILCX_API_BASE': 'str', 'MAILCX_DOMAIN': 'str', 'MAILCX_RANDOM_LOCAL_LENGTH': 'int', 'CLOUDFLARE_API_BASE': 'str', 'CLOUDFLARE_API_KEY': 'str', 'CLOUDFLARE_AUTH_MODE': 'str', 'CLOUDFLARE_CUSTOM_AUTH': 'str', 'CLOUDFLARE_PATH_DOMAINS': 'str', 'CLOUDFLARE_PATH_ACCOUNTS': 'str', 'CLOUDFLARE_PATH_TOKEN': 'str', 'CLOUDFLARE_PATH_MESSAGES': 'str', 'CLOUDFLARE_DEFAULT_DOMAINS': 'list_str_multiline', 'CLOUDFLARE_REQUEST_TIMEOUT': 'int', 'CLOUDFLARE_NAME_LENGTH': 'int', 'CLOUDMAIL_API_BASE': 'str', 'CLOUDMAIL_ADMIN_EMAIL': 'str', 'CLOUDMAIL_PASSWORD': 'str', 'CLOUDMAIL_TOKEN_PATH': 'str', 'CLOUDMAIL_AUTH_TOKEN': 'str', 'CLOUDMAIL_DOMAINS': 'list_str_multiline', 'CLOUDMAIL_AUTO_ADD_USER': 'bool', 'CLOUDMAIL_RANDOM_LOCAL_LENGTH': 'int', 'REMAIL_API_BASE': 'str', 'REMAIL_API_KEY': 'str', 'REMAIL_PROJECT_ID': 'int', 'REMAIL_EMAIL_SUFFIX': 'str', 'REMAIL_SERVICE_MODE': 'str', 'REMAIL_SUPPLY_POLICY': 'str', 'REMAIL_ORDER_WAIT_SECONDS': 'int', 'REMAIL_REQUEST_TIMEOUT': 'int', 'XIGUA_API_BASE': 'str', 'XIGUA_API_KEY': 'str', 'XIGUA_PROJECT_SLUG': 'str', 'XIGUA_OFFER_ID': 'str', 'XIGUA_REQUEST_TIMEOUT': 'int', 'XIGUA_POLL_ATTEMPTS': 'int', 'XIGUA_POLL_INTERVAL': 'int'})

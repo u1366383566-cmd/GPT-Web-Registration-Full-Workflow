@@ -58,6 +58,7 @@ IPWO 住宅代理提供覆盖195+国家和地区的住宅 IP 资源，支持多�
 - 通用 IMAP 邮箱池：每行 `邮箱----IMAP密码` 或 `邮箱:IMAP密码`，服务器、端口和 SSL 在导入界面统一配置
 - GPTMail 临时邮箱 API：运行时随机生成邮箱并自动收取验证码
 - Mail.cx 临时邮箱 API：运行时随机生成地址并通过服务端长轮询收取验证码（`mailcx`）
+- 域名邮箱 MailCode：官方服务、幂等购买邮箱并按游标自动收码（`mailcode`）
 - Remail 开放 API：按项目下单短效邮箱并自动收取验证码（`remail`）
 - `EMAIL_SOURCE` 支持多个来源组合，例如：
 
@@ -110,7 +111,9 @@ EMAIL_SOURCE = "outlook,generic_api,imap"
 - HTTP 请求数、失败/未完成请求数；
 - WebSocket 帧 payload 字节（如流程使用 WebSocket）。
 
-现代/Legacy WebUI 的注册任务列表会显示总流量，完整结构保存在任务记录的 `network_traffic` 和成功账号的 `extra_json` 中。统计为浏览器侧可观测的请求/响应流量，不包含 TLS/IP/代理隧道额外开销，也不包含邮箱 API、Roxy API 或 CDP 控制通道流量。
+现代/Legacy WebUI 的注册任务列表会显示总流量，完整结构保存在任务记录的 `network_traffic` 和成功账号的 `extra_json` 中。Roxy 新建环境使用代理池、Cloak 使用代理池或显式 HTTP/SOCKS5 代理时，通过本地代理中继统计全浏览器双向传输，包含 TLS、浏览器启动、扩展和后台请求；无须配置上游代理。页面可见的计数另存为 `browser_observed_*`，资源明细仍为页面口径，不能与传输总量直接相加。
+
+复用已有 Roxy 环境、手填 `proxyInfo`、无代理或未支持的代理协议时仍使用页面可见统计，可能漏掉其他 target 和启动阶段。所有统计均不包含 TCP/IP 包头、重传以及代理商特有的计费项，也不包含邮箱 API、Roxy API 或 CDP 控制通道流量。
 
 #### 省流量模式
 
@@ -145,7 +148,36 @@ BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES=["image", "media", "stylesheet"]
 
 CSS 通常不是注册接口必需，但会影响隐藏元素、布局和可见性判断，建议先单独测试；出现元素找不到或点击异常时移除 `stylesheet`。
 
+#### 阻止 Google 后台组件下载
+
+开启本地浏览器省流量模式后，Roxy/Cloak 使用的本地代理中继会在**连接上游代理之前**拒绝 `dl.google.com`、`gvt1.com` 及其子域名（含 `redirector.gvt1.com` 和 `rr8---*.gvt1.com`），覆盖浏览器启动及后台下载，不依赖 Selenium/Playwright 页面拦截。按域名边界匹配，不会误拦 `notgvt1.com`、`gvt1.com.example.org`；不会因此屏蔽 ChatGPT/OpenAI 域名。
+
+```dotenv
+BROWSER_DATA_SAVER_MODE=True
+BROWSER_DATA_SAVER_BLOCKED_PROXY_HOSTS="dl.google.com\ngvt1.com"
+```
+
+WebUI「浏览器画像 → 省流量代理域名屏蔽」可修改域名，每行一个（不要填写 URL/路径）。填写 `[]` 可单独关闭这组规则；关闭省流量模式也会停用。保存并重启服务后，新建浏览器代理中继使用新规则；现有已建立的连接不受追溯影响。仅对经过本地中继的请求生效，复用已有 Roxy 环境或未经过中继的代理不能保证拦截。
+
+命中后返回本地 HTTP 403，不连接远端、不产生该次代理传输字节；浏览器可能重试，重试也会被本地拒绝。首次命中记录 `[代理省流量]`，任务结束输出 `[代理拦截] target=dl.google.com:443 blocked=...`，累计次数保存在 `network_traffic.proxy_transport.blocked_connection_count` 和各目标的 `blocked_connection_count`。拦截不计入失败连接，也不根据未知下载大小虚构“节省字节”。该规则会阻止匹配域名的组件/扩展下载；需要这些功能时可移除相应域名。
+
+#### SOCKS5 连接失败与自动恢复
+
+代理返回 `SOCKS5 code 1` 代表代理端一般性建连失败，不能单凭该码判断是认证错误或浏览器关闭引起。对于 CONNECT 握手阶段返回的临时错误码 `1/3/4/6`，本地中继使用相同代理和目标重新建立连接，最多尝试 3 次，间隔 0.25/0.5 秒；未向目标转发浏览器数据前才允许重试，不重放 HTTP 请求或 TLS 数据。认证失败、规则拒绝、不支持的命令/地址、目标端口拒绝不会按此机制重试。
+
+恢复成功记录 `代理重连已恢复 destination=...`；3 次仍失败会在发生处输出含目标域名及错误码含义的 WARNING。`[代理目标]` 新增 `retries/recovered`，任务记录中保留 `connect_retry_count/recovered_connection_count`。代理中继关闭引发的连接终止不计为代理故障；清理阶段输出连接汇总，不再把历史 `last_error` 重复作为当前故障告警。若持续失败，应依据具体目标和代理服务商侧诊断处理，本地重试不能保证恢复代理服务器的持续故障。
+
 #### 资源明细日志
+
+**定位页面统计之外的流量：** 使用本地代理中继的 Roxy/Cloak 任务会自动输出 `[代理目标]` 汇总，不依赖资源明细开关。按代理连接的目标域名/IP 和端口统计上传、下载、总字节、占比、连接数及失败数，并按消耗从大到小排列；浏览器启动和后台连接也计入。例如：
+
+```text
+[Roxy] [代理目标] #1 target=cdn.example.com:443 upload=12000B download=20971520B total=20983520B (20.01 MiB) share=87.90% connections=4 failed=0
+```
+
+完整数据保存在任务及账号的 `network_traffic.proxy_transport.destinations` 中。各目标字节之和与同一快照的代理传输总量一致；进行中的连接也计入，不必等隧道关闭。连接建立失败且没有传输正文的目标保留连接/失败计数，但不输出零消耗的 `[代理目标]` 行；连接失败日志另含 `destination`，便于定位。
+
+这是**连接目标归因**，不是页面请求明细：HTTPS 加密隧道只能看到目标 host:port，不能识别完整路径，也不能仅凭流量判断是扩展、Service Worker 还是页面发起。同域名的启动和页面访问会合并；不能把“代理目标字节 − 页面字节”直接当成某个后台组件的消耗。没有经过本地中继的流量无法归因。此前已结束的任务没有采集目标维度，不能事后补算。
 
 需要分析注册流程中哪些资源占流量时，开启：
 
@@ -154,7 +186,14 @@ BROWSER_TRAFFIC_DETAIL_LOG=True
 BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES=2000
 ```
 
-启用统计的 Roxy/Cloak 注册任务结束后，日志会输出 `[资源明细]` 行，包含资源 URL、类型、HTTP 方法、状态码、上传大小、下载大小、响应 body/header 大小，以及 `failed`、`blocked`、`unfinished`、`cache` 状态；明细按单请求总字节从大到小排列。Browser Use/Skyvern 云端浏览器不启用该监听。`ws_upload/ws_download` 表示 WebSocket 帧 payload。Playwright 缓存状态在无法从 API 确认时显示 `unknown`，Selenium/CDP 能识别时显示 `hit` 或 `miss`。URL 查询参数值、data/blob URL 内容不会写入日志。
+启用统计的 Roxy/Cloak 注册任务结束后，日志只输出有流量消耗的 `[资源明细]` 行，被拦截、零字节、本机回环和 data/blob 访问不输出；纯本地缓存命中不消耗网络字节，也不输出。失败或未完成但已有收发字节的访问仍保留。每条包含资源 URL、类型、HTTP 方法、状态码、上传 `upload`、下载 `download`、总消耗 `total`（单位 B），以及响应 body/header 大小和失败/缓存状态；按单次总消耗从大到小排列。汇总显示全部有消耗访问的上传、下载、总字节，即使明细超过 `BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES` 的输出上限，汇总也不会截断。
+
+示例：
+```text
+[资源明细] #1 xhr POST status=201 upload=12B download=28B total=40B ... size_source=playwright.sizes url=https://example.test/api
+```
+
+单访问明细采用浏览器可观察的 HTTP/WS 字节口径，不包含 TLS/IP 开销，不能把全浏览器代理传输总量直接分摊给 URL。`size_source=playwright.sizes` 表示 Playwright 返回的尺寸，`cdp.encoded+estimated_headers` 表示 CDP 传输字节配合估算请求/响应头，`estimated_upload` 表示无法取得尺寸时的上传估算（不应视为精确实测）；`resource_timing` 表示浏览器 Timing 数据。Browser Use/Skyvern 云端浏览器不启用该监听。`ws_upload/ws_download` 表示 WebSocket 帧 payload。URL 查询参数值、data/blob URL 内容不会写入日志。
 
 把一轮注册的 `[资源明细]` 日志发回后，可以按域名、路径、资源类型和实际字节量判断下一步是否适合继续拦截；`stylesheet`、`font` 等类型需要结合注册是否受影响再启用。
 
@@ -375,6 +414,27 @@ Cloudflare Email Routing 需要把域名邮件转发到 QQ 邮箱。此模式不
 - `api-key`获取页面：https://mailnest.top/account
 - 项目代码获取页面：https://mailnest.top/buy-email。默认为`chatgpt001`，可以直接使用
 
+#### 域名邮箱 MailCode
+
+在「配置 → 邮箱 / OTP → 域名邮箱 MailCode」填写 API Key 和商品 ID，点击「打开官网」可前往 https://mailcode.bzb.qzz.io。服务地址固定使用该官网，不显示地址配置，也不接受旧 `MAILCODE_API_BASE` 环境变量覆盖。保存密钥后，可点击「查询商品与余额」查看商品 ID、价格和库存（查询不会购买）。
+
+```dotenv
+USE_EMAIL_SERVICE=True
+EMAIL_SOURCE="mailcode"
+MAILCODE_API_KEY="你的_API_KEY"
+MAILCODE_PRODUCT_ID="product_a3783a0ead074b4091631b9ad04153f9"
+MAILCODE_REQUEST_TIMEOUT=20
+MAILCODE_CHANNEL_WAIT_SECONDS=60
+```
+
+API Key 需要商品、余额、邮箱读取及 `orders:write` 等对应权限。每次任务领取一个指定商品的邮箱，购买结果从 `data.items[0]` 读取；不自动换商品、不申请退款。购买后先调用取码接口按需初始化 IMAP，通道 READY 后才返回邮箱，让注册流程触发验证码发送。
+
+网络超时、429 或服务错误重试时复用原幂等键和请求内容，遵循 `Retry-After`。待确认订单保存在 `cache/mailcode/purchases/`，重启后继续原请求，避免重复扣费；已购但通道准备失败也不会再次购买。该目录不要在订单结果未确认时删除。同一服务配置的领取流程在本进程串行执行；不要让多个进程共用同一缓存目录并同时领取。
+
+验证码按邮箱分别持久化服务端 `next_sequence`（`cache/mailcode/contexts/`），不加 1，不按验证码数字去重，保留如 `012345` 的前导零；按发送时间和过期时间过滤旧码。默认至少间隔 5 秒查询，`has_more=true` 时继续分页。重启后可从本地上下文恢复，缺少上下文时会分页查询已购邮箱，不会为查活重新购买。缓存只保存订单、邮箱和游标，不保存 API Key。
+
+客户端另提供商品、余额、订单列表/详情、已购邮箱、通道状态和取码链接导出/撤销函数，供本地集成调用。
+
 #### Remail 开放 API
 
 Remail API 文档：[https://remail.aishop6.com/docs](https://remail.aishop6.com/docs)。该服务使用 API Key
@@ -476,7 +536,10 @@ CLOAK_USER_DATA_DIR = ""        # 留空临时环境；填路径可持久化 pro
 REGISTRATION_DRIVER = "protocol"
 ```
 
-协议注册会使用 `curl_cffi`、Sentinel/PoW、代理池等配置。
+协议注册会使用 `curl_cffi`、Sentinel/PoW、代理池等配置，并强制走
+`create-account/password` 邮箱密码注册流程。注册密码与浏览器驱动一致：
+优先使用 `config/register.py` 的 `REGISTER_PASSWORD`，未配置时随机生成，
+并保存到账号的 `extra_json.registration_password`。
 
 #### 使用 Browser Use Cloud 注册
 

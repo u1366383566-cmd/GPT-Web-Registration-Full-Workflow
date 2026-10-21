@@ -651,6 +651,8 @@
       min-height: 32px !important; min-width: 0 !important; max-width: 48px;
     }
     .jobs-v2-pager .pager-goto input:focus { outline: none; border-color: #377DFF; }
+    .pager-bar .pager-goto { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+    .pager-bar .pager-goto input { width:58px; padding:6px 7px; border:1px solid var(--border); border-radius:7px; text-align:center; }
     .jobs-v2-pager button {
       min-height: 32px; height: 32px; border: 1px solid #dcdfe6; border-radius: 4px;
       background: #fff; color: #606266; font: inherit; font-size: 14px;
@@ -740,7 +742,7 @@
     .accounts-table-v2 .col-source { width: 90px; }
     .accounts-table-v2 .col-token { width: 100px; }
     .accounts-table-v2 .col-password { width: 120px; }
-    .accounts-table-v2 .col-plan { width: 120px; }
+    .accounts-table-v2 .col-plan { width: 220px; }
     .accounts-table-v2 .col-note { width: 140px; }
     .accounts-table-v2 .col-small { width: 170px; }
     .accounts-table-v2 .col-status { width: 100px; }
@@ -820,6 +822,17 @@
     }
     .accounts-table-v2 .pill.status-running {
       color: #fa8c16; background: #fff7e6; border-color: #ffd591;
+    }
+    .accounts-table-v2 .plan-promo-stack {
+      display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+      width: 100%; white-space: normal;
+    }
+    .accounts-table-v2 .plan-promo-head {
+      display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+    }
+    .accounts-table-v2 .plan-promo-stack .pill {
+      height: auto; min-height: 26px; max-width: 100%; line-height: 1.3;
+      text-align: left; white-space: normal; overflow-wrap: anywhere;
     }
     .accounts-table-v2 .acc-v2-token-copy {
       display: inline-flex; align-items: center; justify-content: center;
@@ -1914,6 +1927,9 @@
     .config-section-v2-subhelp {
       margin: 12px 0 0; font-size: 13px; color: #909399; line-height: 1.5;
     }
+    .config-section-v2-subhelp:has(.remail-promo-notice) {
+      white-space: nowrap; overflow-x: auto;
+    }
     .remail-promo-notice {
       display: inline-flex; align-items: center; gap: 6px;
       margin: 0 0 0 10px; padding: 8px 12px;
@@ -2225,9 +2241,15 @@
             </span>
           </label>
           <button type="button" class="acc-v2-toggle" id="showArchivedAccountsV2" aria-pressed="false" title="默认只显示未归档账号；开启后单独查看归档账号">查看归档</button>
-          <button type="button" class="acc-v2-toggle" id="showPlusAccountsOnlyV2" aria-pressed="false" title="只查询/显示已开通 Plus 的账号">已开通Plus</button>
-          <button type="button" class="acc-v2-toggle" id="showPlusTrialAccountsOnlyV2" aria-pressed="false" title="只查询/显示当前为 free 且可试用 Plus 的账号">可试用Plus</button>
-          <button type="button" class="acc-v2-toggle" id="showFreeAccountsOnlyV2" aria-pressed="false" title="只查询/显示已明确不能试用 Plus 的 free 账号；资格未知的账号不包含">free不可试用Plus</button>
+          <button type="button" class="acc-v2-toggle" id="showPlusAccountsOnlyV2" aria-pressed="false" title="只查询/显示已开通套餐的账号">已开通套餐</button>
+          <button type="button" class="acc-v2-toggle" id="showPlusTrialAccountsOnlyV2" aria-pressed="false" title="只查询/显示当前为 free 且存在 eligible_promo_campaigns 套餐优惠的账号，不限 Plus">有套餐优惠</button>
+          <label class="acc-v2-inline" title="指定 eligible_promo_campaigns 中的套餐类型；留空表示全部优惠类型">优惠类型
+            <select id="promoTypeFilterV2"><option value="">全部</option><option value="plus">Plus</option><option value="pro">Pro</option><option value="go">Go</option><option value="team">Team</option><option value="business">Business</option></select>
+          </label>
+          <label class="acc-v2-inline" title="按 eligible_promo_campaigns 优惠百分比筛选">优惠力度
+            <select id="promoDiscountFilterV2"><option value="">全部</option><option value="100">100%优惠</option><option value="50">50%优惠</option><option value="other">其他优惠（非100%/50%）</option></select>
+          </label>
+          <button type="button" class="acc-v2-toggle" id="showFreeAccountsOnlyV2" aria-pressed="false" title="只查询/显示已明确不能试用套餐的 free 账号；资格未知的账号不包含">free不可试用套餐</button>
           <label class="acc-v2-inline" title="按账号状态筛选账号">
             <select id="codexStatusFilterV2">
               <option value="">全部状态</option>
@@ -2263,6 +2285,8 @@
       <div class="jobs-toolbar-v2" id="accountsToolbarV2">
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">套餐/提链</span>
+<button type="button" class="jobs-tb-btn" id="btnStartInspection" onclick="startAccountInspection()" title="按当前归档筛选巡检账号：本地解析 AT，失效后自动查活及查套餐">一键巡检</button>
+<button type="button" class="jobs-tb-btn" onclick="openInspectionHistory()">巡检历史</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive()" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="给选中的 free(可Plus试用) 账号批量提链，类型按配置 PIX/UPI/KAKAO_PAY/IDEAL">提链</button>
@@ -2288,6 +2312,7 @@
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExportSelectedChatgpt2apiV2" disabled title="把勾选的账号导出为「GPT网页额度反代旧版(chatgpt2api)」可批量导入的 JSON 文件">导出反代JSON</button>
           <button type="button" class="jobs-tb-btn" id="btnArchiveSelectedAccountsV2" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档选中</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedAccountsV2" disabled title="删除选中的本地账号/token记录">删除</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteDeactivatedAccounts" onclick="deleteDeactivatedAccounts()" title="删除当前归档范围内全部已废账号，不限当前页；不受其他筛选影响">一键删除已废</button>
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">全部</span>
@@ -2587,7 +2612,7 @@
       <label class="outlook-import-field"><span>新邮箱来源</span><select id="emailChangeSourceV2">
         <option value="outlook">Outlook 邮箱池</option><option value="generic_api">通用 API</option><option value="imap">通用 IMAP</option>
         <option value="cloudflare_domain">Cloudflare 域名邮箱</option><option value="cloudflare">Cloudflare 临时邮箱</option>
-        <option value="gptmail">GPTMail</option><option value="mailnest">MailNest</option><option value="mailcx">Mail.cx</option><option value="cloudmail">CloudMail</option><option value="remail">Remail</option>
+        <option value="gptmail">GPTMail</option><option value="mailnest">MailNest</option><option value="mailcx">Mail.cx</option><option value="cloudmail">CloudMail</option><option value="remail">Remail</option><option value="mailcode">域名邮箱 MailCode</option><option value="xigua">西瓜</option>
       </select></label>
       <div class="banner warn">换绑成功后当前 access_token 会失效并被清空，系统会立即使用新邮箱自动查活并刷新 AT。原邮箱会保留在账号记录中。</div>
     </div>
@@ -2647,7 +2672,12 @@ function _renderPager(id, total) {
     <button onclick="pagerGo('${id}',1)"${p.page >= totalPages ? ' disabled' : ''}>下一页 →</button>
     <select onchange="pagerSetSize('${id}',this.value)">${sizes.map(s =>
       `<option value="${s}"${p.size === s ? ' selected' : ''}>${s} 条/页</option>`
-    ).join('')}</select>`;
+    ).join('')}</select>
+    ${id === 'accounts' ? `<label class="pager-goto">前往
+      <input type="number" min="1" max="${totalPages}" value="${p.page}" inputmode="numeric"
+        onkeydown="if(event.key==='Enter'){pagerJump('${id}',this.value);event.preventDefault();}">
+      页 <button type="button" onclick="pagerJump('${id}',this.previousElementSibling.value)">跳转</button>
+    </label>` : ''}`;
   const el = document.getElementById('pager-' + id);
   if (el) el.innerHTML = html;
 
@@ -2688,9 +2718,8 @@ function _renderPager(id, total) {
         </div>
         <label class="pager-goto">前往
           <input type="number" min="1" max="${totalPages}" value="${p.page}" inputmode="numeric"
-            onkeydown="if(event.key==='Enter'){pagerJump('${id}',this.value);event.preventDefault();}"
-            onchange="pagerJump('${id}',this.value)">
-          页
+            onkeydown="if(event.key==='Enter'){pagerJump('${id}',this.value);event.preventDefault();}">
+          页 <button type="button" onclick="pagerJump('${id}',this.previousElementSibling.value)">跳转</button>
         </label>`;
     }
   }
@@ -2796,7 +2825,10 @@ function formatTraffic(t) {
   };
   const j = t.js_coverage;
   const jsHint = j && j.enabled ? `，JS脚本 ${n(j.script_count)}（执行 ${n(j.executed_script_count)}，候选 ${n(j.candidate_script_count)}）` : '';
-  return `<span title="上传 ${fmt(t.upload_bytes)}，下载 ${fmt(t.download_bytes)}，${n(t.request_count)} 个请求${jsHint}">${fmt(t.total_bytes)}</span>`;
+  const scopeHint = t.proxy_transport && t.proxy_transport.available
+    ? `全浏览器代理传输（含TLS），页面可见 ${fmt(t.browser_observed_total_bytes)}`
+    : '页面可见流量（不含TLS，可能漏计启动及后台请求）';
+  return `<span title="${scopeHint}；上传 ${fmt(t.upload_bytes)}，下载 ${fmt(t.download_bytes)}，页面 ${n(t.request_count)} 个请求${jsHint}">${fmt(t.total_bytes)}</span>`;
 }
 function jobsV2OpIcons() {
   return {
@@ -2818,7 +2850,11 @@ async function copyText(text) {
 }
 async function api(url, opts) {
   const r = await fetch(url, opts);
-  const j = await r.json().catch(()=>({}));
+  const j = await r.json().catch(error => {
+    // 读取响应体时也可能超时；不能把取消请求伪装成成功的空响应。
+    if (opts?.signal?.aborted || error?.name === 'AbortError') throw error;
+    return {};
+  });
   if (!r.ok) throw new Error(j.error || ('HTTP '+r.status));
   return j;
 }
@@ -3269,6 +3305,7 @@ async function pollLog() {
 
 // ---------- 账号 ----------
 let accountsLoading = false;
+let accountsReloadPending = false;
 let planStatusLoading = false;
 let planStatusRevision = '';
 function getAccountsQuery() {
@@ -3289,13 +3326,19 @@ function getCodexBulkWorkers() {
 }
 function getAccountsPlanFilter() {
   if (SHOW_PLUS_ACCOUNTS_ONLY) return 'plus';
-  if (SHOW_PLUS_TRIAL_ACCOUNTS_ONLY) return 'plus_trial';
+  if (SHOW_PLUS_TRIAL_ACCOUNTS_ONLY) {
+    const type = (document.getElementById('promoTypeFilterV2')?.value || '').trim().toLowerCase();
+    const discount = (document.getElementById('promoDiscountFilterV2')?.value || '').trim();
+    return (type || discount) ? `promo:${type || '*'}:${discount}` : 'promo';
+  }
   if (SHOW_FREE_ACCOUNTS_ONLY) return 'free_no_trial';
   return '';
 }
 async function loadAccounts() {
-  if (accountsLoading) return;
+  if (accountsLoading) { accountsReloadPending = true; return; }
   accountsLoading = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = getAccountsPlanFilter();
@@ -3305,14 +3348,24 @@ async function loadAccounts() {
     const dateFrom = document.getElementById('dateFromAccountsV2')?.value || '';
     const dateTo = document.getElementById('dateToAccountsV2')?.value || '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`, {signal: controller.signal});
+    // 有更新请求时丢弃旧快照，finally 合并读取最新列表。
+    if (accountsReloadPending) return;
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
-    if (p.page > totalPages) { p.page = totalPages; accountsLoading = false; return loadAccounts(); }
+    if (p.page > totalPages) { p.page = totalPages; accountsReloadPending = true; return; }
     renderAccounts();
-  } catch(e) { showToast('加载账号失败: ' + e.message); }
-  finally { accountsLoading = false; }
+  } catch(e) {
+    if (!accountsReloadPending) showToast(controller.signal.aborted ? '加载账号超时，请重试' : '加载账号失败: ' + e.message);
+  } finally {
+    clearTimeout(timeout);
+    accountsLoading = false;
+    if (accountsReloadPending) {
+      accountsReloadPending = false;
+      return loadAccounts();
+    }
+  }
 }
 async function pollAccountPlanStatuses() {
   if (planStatusLoading || accountsLoading) return;
@@ -3452,6 +3505,42 @@ function _discountLabel(r) {
   if (!Number.isNaN(n)) return `${n}折扣`;
   return `${amount}折扣`;
 }
+function _promoPlanName(key, campaign) {
+  const meta = (campaign && typeof campaign === 'object' && campaign.metadata && typeof campaign.metadata === 'object') ? campaign.metadata : {};
+  const raw = String(meta.plan_name || key || '套餐').trim();
+  const known = {
+    chatgptplusplan:'Plus', chatgptproplan:'Pro', chatgptteamplan:'Team',
+    chatgptbusinessplan:'Business', chatgptgoplan:'Go', plus:'Plus', pro:'Pro',
+    team:'Team', business:'Business', go:'Go'
+  };
+  const normalized = raw.toLowerCase().replace(/[\s_-]/g, '');
+  if (known[normalized]) return known[normalized];
+  return raw.replace(/^chatgpt/i, '').replace(/plan$/i, '') || raw;
+}
+function _promoDurationLabel(duration) {
+  if (!duration || typeof duration !== 'object' || duration.num_periods == null) return '';
+  const n = duration.num_periods;
+  const period = String(duration.period || '').toLowerCase();
+  const unit = period === 'month' ? '个月' : period === 'year' ? '年' : period === 'week' ? '周' : period === 'day' ? '天' : period;
+  return `${n}${unit}`;
+}
+function _promoSummaries(campaigns) {
+  if (!campaigns || typeof campaigns !== 'object') return [];
+  return Object.entries(campaigns).map(([key, campaign]) => {
+    const meta = (campaign && typeof campaign === 'object' && campaign.metadata && typeof campaign.metadata === 'object') ? campaign.metadata : {};
+    const percentage = meta.discount && meta.discount.percentage;
+    const offer = percentage !== undefined && percentage !== null && percentage !== ''
+      ? (Number(percentage) === 100 ? '免费' : `${percentage}%折扣`)
+      : String(meta.promotion_type_label || meta.title || (campaign && campaign.id) || '有优惠');
+    const duration = _promoDurationLabel(meta.duration);
+    return `${_promoPlanName(key, campaign)}：${offer}${duration ? `/${duration}` : ''}`;
+  });
+}
+function _promoStackHtml(baseText, baseClass, summaries, title, detailBtn = '') {
+  const base = `<span class="pill ${baseClass}" title="${esc(title)}">${esc(baseText)}</span>`;
+  const lines = summaries.map(item => `<span class="pill status-success" title="${esc(item)}">${esc(item)}</span>`).join('');
+  return `<div class="plan-promo-stack"><div class="plan-promo-head">${base}${detailBtn}</div>${lines}</div>`;
+}
 function _planCell(r) {
   const ok = r.plan_check_ok;
   const err = r.plan_check_error || '';
@@ -3462,6 +3551,8 @@ function _planCell(r) {
     route === 'direct_fallback' ? `网络: 直连回退${r.plan_check_proxy_fallback_reason ? ` (${r.plan_check_proxy_fallback_reason})` : ''}` :
     route === 'direct' ? '网络: 直连' : '';
   const title = [err ? esc(err) : checked, routeLabel].filter(Boolean).join('；');
+  const campaigns = (r.eligible_promo_campaigns && typeof r.eligible_promo_campaigns === 'object') ? r.eligible_promo_campaigns : {};
+  const promoSummaries = _promoSummaries(campaigns);
   if (['queued','running'].includes(r.plan_check_status)) {
     const automatic = r.plan_check_trigger === 'registration_auto';
     const queued = r.plan_check_status === 'queued';
@@ -3473,7 +3564,7 @@ function _planCell(r) {
   if (err || r.plan_check_status === 'failed') {
     const reason = err || '套餐查询失败，未返回具体原因';
     const hasLastSuccess = Boolean(r.plan_last_success_at);
-    const lastPlan = hasLastSuccess ? `${plan}${r.plus_trial_eligible ? '/可Plus试用' : ''}` : '';
+    const lastPlan = hasLastSuccess ? `${plan}${promoSummaries.length ? `（${promoSummaries.join('；')}）` : ''}` : '';
     const lastText = lastPlan ? `（上次: ${lastPlan}）` : '';
     const lastTitle = hasLastSuccess ? `上次成功: ${esc(r.plan_last_success_at)}` : '';
     return `<div class="extract-link-cell"><span class="pill status-failed" title="${[esc(reason), lastTitle].filter(Boolean).join('；')}">查询失败${esc(lastText)}</span><div class="extract-link-error" title="${esc(reason)}">${esc(reason)}</div></div>`;
@@ -3485,10 +3576,11 @@ function _planCell(r) {
     if (!checkedOk) {
       return `<span class="pill status-running" title="${title}">${esc(plan)}（待查资格）</span>`;
     }
-    const text = r.plus_trial_eligible ? 'free(可Plus试用)' : 'free';
-    const cls = r.plus_trial_eligible ? 'status-success' : 'status-used';
-    const t = r.plus_trial_eligible ? `${title}；Plus 试用资格可用` : title;
-    return `<span class="pill ${cls}" title="${t}">${esc(text)}</span>`;
+    const cls = promoSummaries.length ? 'status-success' : 'status-used';
+    const t = promoSummaries.length ? `${title}；可用套餐优惠：${promoSummaries.join('；')}` : title;
+    const keys = Object.keys(campaigns);
+    const detailBtn = keys.length ? `<button type="button" class="promo-detail-btn" data-promo-details="${esc(JSON.stringify(campaigns))}">详情(${keys.length})</button>` : '';
+    return _promoStackHtml('free', cls, promoSummaries, t, detailBtn);
   }
 
   const cls = 'status-success';
@@ -3507,7 +3599,7 @@ function _planCell(r) {
   if (r.plan_renews_at) detail.push(`续费时间: ${r.plan_renews_at}`);
   if (r.discount_expires_at) detail.push(`折扣结束: ${r.discount_expires_at}`);
   if (r.discount_promo_campaign_id) detail.push(`优惠: ${r.discount_promo_campaign_id}`);
-  return `<span class="pill ${cls}" title="${esc(detail.join('；'))}">${esc(text)}</span>`;
+  return _promoStackHtml(text, cls, promoSummaries, detail.join('；'));
 }
 function _planAction(r) {
   if (['queued','running'].includes(r.plan_check_status)) {
@@ -4178,6 +4270,14 @@ async function refreshAccountsList(btn) {
   const plusTrialV2 = $('#showPlusTrialAccountsOnlyV2');
   if (plusTrialV2) plusTrialV2.addEventListener('click', () => {
     applyAccountsPlusTrialFilter(!SHOW_PLUS_TRIAL_ACCOUNTS_ONLY);
+  });
+  const promoTypeV2 = $('#promoTypeFilterV2');
+  if (promoTypeV2) promoTypeV2.addEventListener('change', () => {
+    applyAccountsPlusTrialFilter(true);
+  });
+  const promoDiscountV2 = $('#promoDiscountFilterV2');
+  if (promoDiscountV2) promoDiscountV2.addEventListener('change', () => {
+    applyAccountsPlusTrialFilter(true);
   });
   const freeV2 = $('#showFreeAccountsOnlyV2');
   if (freeV2) freeV2.addEventListener('click', () => {
@@ -6017,7 +6117,9 @@ function emailConfigSectionForKey(key) {
   if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢临时邮箱 API 配置'];
   if (key.startsWith('MAILCX_')) return ['Mail.cx', 'Mail.cx 临时邮箱 API：随机地址与长轮询验证码'];
   if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
+  if (key.startsWith('MAILCODE_')) return ['域名邮箱 MailCode', '官方服务、商品购买与自动取码'];
   if (key.startsWith('REMAIL_')) return ['Remail', 'Remail 开放 API、项目下单和取件配置'];
+  if (key.startsWith('XIGUA_')) return ['西瓜', '西瓜邮箱接码 API、项目方案和取件配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
   if (key.startsWith('IMAP_')) return ['通用 IMAP', '通用 IMAP 邮箱池的收件目录配置'];
   if (key.startsWith('CLOUDFLARE_')) return ['Cloudflare 临时邮箱', 'Cloudflare Worker 临时邮箱 API、鉴权与路径配置'];
@@ -6201,6 +6303,15 @@ function getAutoPlanCheckValue() {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   return !!fv;
 }
+function getProtocolFingerprintReuseField() {
+  return (CONFIG || []).find(f => f.key === 'PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL') || null;
+}
+function getProtocolFingerprintReuseValue() {
+  const f = getProtocolFingerprintReuseField();
+  if (!f) return false;
+  const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
+  return !!fv;
+}
 function registrationDriverLabel(value) {
   const cur = String(value || '').trim().toLowerCase();
   const hit = registrationDriverChoices().find(c => String(c.value) === cur);
@@ -6254,7 +6365,7 @@ function renderRegistrationDriverCard() {
     labelEl.textContent = label;
     labelEl.classList.toggle('is-placeholder', !label || label === '—');
   }
-  if (hintEl) hintEl.textContent = `驱动标识: ${cur} · 自动查套餐: ${getAutoPlanCheckValue() ? '开' : '关'}`;
+  if (hintEl) hintEl.textContent = `驱动标识: ${cur} · 自动查套餐: ${getAutoPlanCheckValue() ? '开' : '关'} · 协议指纹: ${getProtocolFingerprintReuseValue() ? '同邮箱保持' : '每次新建'}`;
 }
 function renderRegistrationDriverField(f) {
   return `
@@ -6268,11 +6379,15 @@ function renderRegistrationDriverField(f) {
 function renderRegistrationSettingsSection(fields) {
   const driver = fields.find(f => f.key === 'REGISTRATION_DRIVER') || fields[0];
   const autoPlan = fields.find(f => f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER');
+  const reuseFingerprint = fields.find(f => f.key === 'PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL');
   return `
     <div class="config-section-v2-body config-section-v2-body--single">
       ${driver ? renderRegistrationDriverField(driver) : '<div class="banner warn">未找到注册方式配置项</div>'}
     </div>
-    ${autoPlan ? `<div class="config-switches-v2" style="margin-top:14px;">${renderFeatureSwitchField(autoPlan, { withIcon: false })}</div>` : ''}
+    ${(autoPlan || reuseFingerprint) ? `<div class="config-switches-v2" style="margin-top:14px;">
+      ${autoPlan ? renderFeatureSwitchField(autoPlan, { withIcon: false }) : ''}
+      ${reuseFingerprint ? renderFeatureSwitchField(reuseFingerprint, { withIcon: false }) : ''}
+    </div>` : ''}
   `;
 }
 function renderFeatureSwitchField(f, opts = {}) {
@@ -6293,6 +6408,22 @@ function renderFeatureSwitchField(f, opts = {}) {
       <p class="config-switch-v2-help">${esc(f.help || '')}</p>
     </div>
   `;
+}
+async function loadMailCodeCatalog(btn) {
+  const output = btn.nextElementSibling;
+  btn.disabled = true;
+  output.hidden = false;
+  output.textContent = '正在查询 MailCode 官网商品与余额...';
+  try {
+    const result = await api('/api/mailcode/catalog');
+    if (!result.ok) throw new Error(result.error || '查询失败');
+    const products = (result.products || []).map(p => `${p.name} | 商品 ID: ${p.id} | 单价: ${p.price} 积分 | 库存: ${p.stock} | 启用: ${p.enabled}`);
+    output.textContent = `余额: ${result.wallet?.balance ?? '-'} 积分\n${products.join('\n') || '暂无商品'}`;
+  } catch (e) {
+    output.textContent = '查询失败：' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
 }
 function renderConfigExternalLink(f) {
   const url = String(f.external_url || '').trim();
@@ -6321,7 +6452,9 @@ function renderConfigRecommendedLinks(f) {
 function renderConfigPlainFieldV2(f) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   let control = '';
-  if (f.type === 'int') {
+  if (Array.isArray(f.choices) && f.choices.length) {
+    control = `<select data-key="${attrEsc(f.key)}">${f.choices.map(item => `<option value="${attrEsc(item.value)}"${String(fv) === String(item.value) ? ' selected' : ''}>${esc(item.label || item.value)}</option>`).join('')}</select>`;
+  } else if (f.type === 'int') {
     control = `<input type="number" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
   } else if (f.type === 'float') {
     control = `<input type="number" step="0.1" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
@@ -6354,7 +6487,9 @@ function renderConfigPlainFieldV2(f) {
   const decorated = f.external_url
     ? `<div class="config-field-wrap">${field}${renderConfigExternalLink(f)}</div>`
     : field;
-  return decorated + renderConfigRecommendedLinks(f);
+  const mailCodeTools = f.key === 'MAILCODE_PRODUCT_ID'
+    ? '<div><button type="button" class="btn" onclick="loadMailCodeCatalog(this)">查询商品与余额（请先保存密钥）</button><pre style="white-space:pre-wrap" hidden></pre></div>' : '';
+  return decorated + renderConfigRecommendedLinks(f) + mailCodeTools;
 }
 function renderMixedConfigSectionV2(name, fields, intro) {
   const slug = configGroupSlug(name);
@@ -6444,7 +6579,9 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
   const switches = current.fields.filter(f => f.type === 'bool');
   const inputs = current.fields.filter(f => f.type !== 'bool');
   const promo = name === '邮箱 / OTP' && active === 'Remail'
-    ? '<span class="remail-promo-notice" role="note">通过作者卡网购买积分9折优惠</span>'
+    ? '<span class="remail-promo-notice" role="note">通过作者卡网购买积分9折优惠 · <a href="https://catfk.com/shop/9D4N5XEY" target="_blank" rel="noopener noreferrer">打开卡网</a></span>'
+    : name === '邮箱 / OTP' && active === '西瓜'
+    ? '<span class="remail-promo-notice" role="note">作者卡网购买CDK9折优惠 · <a href="https://catfk.com/shop/9D4N5XEY" target="_blank" rel="noopener noreferrer">打开卡网</a></span>'
     : '';
   const sectionHelp = current.help
     ? `<p class="config-section-v2-subhelp">${esc(current.help)}${promo}</p>`
@@ -6629,12 +6766,15 @@ function renderConfigSectionV2(name, fields) {
       .map(k => fields.find(f => f.key === k))
       .filter(Boolean)
       .concat(fields.filter(f => !preferred.includes(f.key)));
+    const switches = ordered.filter(f => f.type === 'bool');
+    const inputs = ordered.filter(f => f.type !== 'bool');
     return `
       <section class="config-section-v2" id="${esc(slug)}" data-config-section="${esc(name)}">
         ${renderConfigSectionHead(name, '')}
         <div class="config-switches-v2">
-          ${ordered.map(f => renderFeatureSwitchField(f, { withIcon: true })).join('')}
+          ${switches.map(f => renderFeatureSwitchField(f, { withIcon: true })).join('')}
         </div>
+        ${inputs.length ? `<div class="config-section-v2-body">${inputs.map(renderConfigPlainFieldV2).join('')}</div>` : ''}
         <div class="config-section-v2-actions">
           <button type="button" class="btn primary" data-save-config-v2>保存</button>
         </div>
@@ -6660,7 +6800,7 @@ function renderConfigSectionV2(name, fields) {
       name,
       fields,
       emailConfigSectionForKey,
-      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'Mail.cx', 'CloudMail', 'Remail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
+      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'Mail.cx', 'CloudMail', 'Remail', '域名邮箱 MailCode', '西瓜', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
       { get: () => CONFIG_EMAIL_ACTIVE_SECTION_V2, set: v => { CONFIG_EMAIL_ACTIVE_SECTION_V2 = v; } },
       'email-section-v2'
     );
@@ -6883,7 +7023,7 @@ function trackConfigFieldChange(e) {
   const f = CONFIG.find(x => x.key === el.dataset.key);
   if (!f) return;
   CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
-  if (f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER') renderRegistrationDriverCard();
+  if (f.key === 'AUTO_PLAN_CHECK_AFTER_REGISTER' || f.key === 'PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL') renderRegistrationDriverCard();
 }
 $('#tab-config').addEventListener('input', trackConfigFieldChange);
 $('#tab-config').addEventListener('change', trackConfigFieldChange);
@@ -6927,5 +7067,7 @@ jobsTimer = setInterval(() => { if (!$('#tab-register').classList.contains('hidd
 setInterval(loadSummary, 30000);
 setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 10000);
 </script>
+{% include 'promo_details.html' %}
+{% include 'account_inspections.html' %}
 </body>
 </html>

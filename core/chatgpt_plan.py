@@ -6,6 +6,7 @@ import base64
 import ipaddress
 import json
 import logging
+import random
 import socket
 import time
 import uuid
@@ -131,7 +132,9 @@ def resolve_plan_check_route(explicit_proxy: Optional[str] = None) -> dict:
         }
 
     candidates = _proxy_lines(getattr(proxy_cfg, "PLAN_CHECK_PROXY", ""))
-    selected = candidates[0] if candidates else str(proxy_cfg.pick_proxy() or "").strip()
+    # 专用代理配置为代理池时，每次新的套餐查询随机选择一个；
+    # 若未配置专用池，则继续从通用 PROXY_POOL 随机选择。
+    selected = random.choice(candidates) if candidates else str(proxy_cfg.pick_proxy() or "").strip()
     if not selected:
         if mode == "proxy":
             raise ValueError("套餐查询网络模式为 proxy，但未配置 PLAN_CHECK_PROXY 或 PROXY_POOL")
@@ -261,6 +264,14 @@ def parse_accounts_check(data: dict, *, token: str = "") -> dict:
     is_free = str(plan_type).lower() == "free" or str(subscription_plan).lower() == "chatgptfreeplan"
     plus_trial_eligible = bool(is_free and plus_campaign)
 
+    # 保留 Free 账号返回的全部促销活动，供前端查看详情；Plus 资格判定仍然
+    # 只使用上面的 eligible_promo_campaigns.plus，保持原有语义不变。
+    promo_campaigns = {}
+    if is_free and isinstance(eligible_promo_campaigns, dict):
+        for campaign_key, campaign in eligible_promo_campaigns.items():
+            if isinstance(campaign, dict):
+                promo_campaigns[str(campaign_key)] = campaign
+
     offers = ((item.get("eligible_offers") or {}).get("offers") or [])
     eligible_offer_ids = [o.get("id") for o in offers if isinstance(o, dict) and o.get("id")]
 
@@ -295,6 +306,7 @@ def parse_accounts_check(data: dict, *, token: str = "") -> dict:
         "plus_trial_duration_num_periods": duration.get("num_periods"),
         "plus_trial_duration_period": duration.get("period"),
         "plus_trial_promotion_type_label": plus_meta.get("promotion_type_label"),
+        "eligible_promo_campaigns": promo_campaigns,
         "eligible_offer_ids": eligible_offer_ids,
         "features_count": len(item.get("features") or []),
         "can_access_with_session": bool(item.get("can_access_with_session")),
@@ -373,7 +385,9 @@ def check_account_plan(
     timeout: float | None = None,
     max_attempts: int | None = None,
     retry_delay: float | None = None,
+    session: BrowserSession | None = None,
 ) -> dict:
+    """查询套餐；传入 session 时借用现有会话，不更换出口、不预热、不关闭它。"""
     token = normalize_token(token)
     if not token:
         return {"ok": False, "checked_at": now_iso(), "error": "token 为空"}
@@ -389,7 +403,11 @@ def check_account_plan(
         }
 
     try:
-        route = resolve_plan_check_route(proxy)
+        route = resolve_plan_check_route(proxy) if session is None else {
+            "proxy_used": _mask_proxy(session.proxy or "") or None,
+            "network_route": "proxy" if session.proxy else "direct",
+            "proxy_mode": "live_session",
+        }
     except Exception as exc:
         return {
             "ok": False,
@@ -419,16 +437,18 @@ def check_account_plan(
     # 任务级随机 seed：同一查询的所有重试统一 device/session/Cookie；不同账号
     # 或下一次查询不会复用旧浏览器身份。
     task_seed = f"plan-check:{identity}:{uuid.uuid4()}"
-    env: BrowserSession | None = None
+    env: BrowserSession | None = session
+    owns_session = session is None
     relay = None
     try:
         # 首次按代理真实出口自动生成语言/时区画像，随后整条查询链固定不漂移。
-        effective_proxy, relay = open_plan_check_proxy(
-            route, route["proxy"], timeout=timeout_seconds,
-        )
-        env = BrowserSession(
-            proxy=effective_proxy, detect_exit_geo=True, fingerprint_seed=task_seed,
-        )
+        if owns_session:
+            effective_proxy, relay = open_plan_check_proxy(
+                route, route["proxy"], timeout=timeout_seconds,
+            )
+            env = BrowserSession(
+                proxy=effective_proxy, detect_exit_geo=True, fingerprint_seed=task_seed,
+            )
         effective_tz = str(timezone_offset_min or "").strip()
         if not effective_tz or effective_tz == "-":
             effective_tz = str(env.js_timezone_offset_min())
@@ -437,13 +457,14 @@ def check_account_plan(
             f"?timezone_offset_min={quote(effective_tz)}"
         )
         logger.info(
-            "[Plan] 统一会话已创建：proxy=%s device_id=%s oai_session_id=%s %s",
+            "[Plan] 查询会话（新建或借用）：proxy=%s device_id=%s oai_session_id=%s %s",
             route_meta.get("proxy_used") or route_meta.get("network_route") or "direct",
             str(env.device_id)[:12] + "...",
             str(env.oai_session_id)[:12] + "...",
             env.fingerprint_summary_text(),
         )
-        _warm_plan_session(env)
+        if owns_session:
+            _warm_plan_session(env)
 
         for attempt in range(1, attempts + 1):
             resp = None
@@ -542,13 +563,17 @@ def check_account_plan(
             **{k: v for k, v in claims.items() if k != "payload"},
         }
     finally:
-        if env is not None:
+        if owns_session and env is not None:
             try:
                 close_browser_session(env)
             except Exception:
                 pass
         if relay is not None:
-            relay.close()
+            try:
+                relay.close()
+            except Exception:
+                # 清理辅助资源失败不能覆盖已经取得的套餐业务结果。
+                logger.warning("[Plan] 代理中继关闭失败", exc_info=True)
 
     return last_result or {
         "ok": False,

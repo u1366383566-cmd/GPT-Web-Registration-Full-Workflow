@@ -11,7 +11,7 @@ from config import cloakbrowser as _cfg
 from config import twofa as _twofa_cfg
 from core.account_export import save_account_data, post_register_dwell
 from core.browser_data_saver import BrowserDataSaver
-from core.browser_traffic import PlaywrightTrafficTracker
+from core.browser_traffic import PlaywrightTrafficTracker, merge_proxy_transport_traffic
 from core.cloakbrowser_driver import build_cloak_driver
 from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
@@ -166,6 +166,7 @@ def run_cloak_registration(
         post_register_dwell(email, label="Cloak注册")
         if traffic_tracker is not None:
             network_traffic = traffic_tracker.stop()
+        network_traffic = merge_proxy_transport_traffic(network_traffic, driver.proxy_transport_snapshot(), label="Cloak")
         if data_saver is not None:
             data_saver.stop()
         account_id = save_account_data(
@@ -202,6 +203,8 @@ def run_cloak_registration(
                 network_traffic = traffic_tracker.stop()
             except Exception:
                 pass
+        if driver is not None:
+            network_traffic = merge_proxy_transport_traffic(network_traffic, driver.proxy_transport_snapshot(), label="Cloak")
         if data_saver is not None:
             data_saver.stop()
         logger.error("[Cloak注册] 失败：%s: %s", type(exc).__name__, exc)

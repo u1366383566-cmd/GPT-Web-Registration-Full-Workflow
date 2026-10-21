@@ -173,6 +173,26 @@ class OpenAIRegistrationFlowTests(unittest.TestCase):
         })
         self.assertEqual(result["continue_url"], "/api/accounts/email-otp/send")
 
+    def test_navigate_create_account_password_switches_from_passwordless_page(self):
+        class Session(_ProtocolSession):
+            def get(self, url, *, headers, allow_redirects):
+                self.gets.append((url, headers, allow_redirects))
+                return _Response(url="https://auth.openai.com/create-account/password")
+
+        session = Session()
+        final_url = openai_auth.navigate_create_account_password(
+            session, "https://auth.openai.com/email-verification"
+        )
+
+        url, headers, redirects = session.gets[-1]
+        self.assertEqual(url, "https://auth.openai.com/create-account/password")
+        self.assertEqual(headers["referer"], "https://auth.openai.com/email-verification")
+        self.assertEqual(headers["sec-fetch-site"], "same-origin")
+        self.assertEqual(headers["sec-fetch-user"], "?1")
+        self.assertTrue(redirects)
+        self.assertEqual(final_url, "https://auth.openai.com/create-account/password")
+        self.assertEqual(session.document_navigation_id, "document-1-next")
+
     def test_email_otp_send_accepts_relative_url_and_rotates_document_id(self):
         session = _ProtocolSession()
 

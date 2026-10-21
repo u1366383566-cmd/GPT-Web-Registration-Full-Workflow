@@ -342,6 +342,10 @@ def _check_live_in_current_session(
     from core.chatgpt_auth import get_csrf_token, signin_openai
     from core.openai_auth import follow_authorize
 
+    from core.live_check_service import complete_authenticated_live_check
+    expected_account = db.get_account(account_id)
+    if not expected_account or str(expected_account.get("email") or "").lower() != email.lower():
+        raise RuntimeError("账号已删除或邮箱已变更，取消原会话查活")
     live_started = time.monotonic()
     _append_log(account_id, "原会话查活开始：复用 Cookie、CF 状态、出口和当前指纹")
     step_started = time.monotonic()
@@ -375,8 +379,11 @@ def _check_live_in_current_session(
         "fingerprint": _safe_fingerprint_for_account(session),
         "fingerprint_text": _safe_fingerprint_text_for_account(session),
     }
-    db.update_account_liveness(account_id, result)
-    _append_log(account_id, f"原会话查活成功：最新 AT 已写回，total={_cost(live_started)}")
+    result = complete_authenticated_live_check(account_id=account_id, expected_account=expected_account,
+                                               result=result, session=session)
+    if not result.get("ok"):
+        raise RuntimeError(result.get("error") or "原会话查活结果写入失败")
+    _append_log(account_id, f"原会话查活成功：最新 AT 已写回，已自动查套餐，total={_cost(live_started)}")
     return result
 
 

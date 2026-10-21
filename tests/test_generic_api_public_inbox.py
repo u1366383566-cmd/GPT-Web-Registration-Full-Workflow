@@ -77,13 +77,13 @@ class GenericApiPublicInboxTests(unittest.TestCase):
         ))
         self.assertFalse(session.trust_env)
 
-    def test_fetch_latest_otp_applies_proxy_pool_route(self):
+    def test_fetch_latest_otp_applies_dedicated_proxy_route(self):
         email = "inbox-0141-d678@071898.7bcb28.221wx.com"
         account = GenericApiEmailAccount(email=email, code_url="https://mail.knm03.com/i/token")
         session = _Session()
         proxy = "socks5://user:secret@127.0.0.1:7897"
         with patch("core.generic_api_mail_client.get_account_context", return_value=account), \
-             patch("core.generic_api_mail_client._proxy_cfg.pick_proxy", return_value=proxy), \
+             patch("core.generic_api_mail_client._email_cfg.GENERIC_API_PROXY", proxy), \
              patch("core.generic_api_mail_client.requests.Session", return_value=session):
             code = fetch_latest_otp(email, max_wait=2, poll_interval=0.01, settle_seconds=0)
         self.assertEqual(code, "739201")
@@ -101,7 +101,7 @@ class GenericApiPublicInboxTests(unittest.TestCase):
 
         proxy_session.get = proxy_failure
         with patch("core.generic_api_mail_client.get_account_context", return_value=account), \
-             patch("core.generic_api_mail_client._proxy_cfg.pick_proxy", return_value="socks5://127.0.0.1:7897"), \
+             patch("core.generic_api_mail_client._email_cfg.GENERIC_API_PROXY", "socks5://127.0.0.1:7897"), \
              patch("core.generic_api_mail_client.requests.Session", side_effect=[proxy_session, direct_session]):
             code = fetch_latest_otp(email, max_wait=2, poll_interval=0.01, settle_seconds=0)
         self.assertEqual(code, "739201")

@@ -31,7 +31,14 @@ def _ensure_authorize_context(authorize_url: str, session: BrowserSession, email
         params = parse_qs(parsed.query, keep_blank_values=True)
         # 旧实现主动注入该字段；当前成功浏览器 authorize 已不携带。
         changed = bool(params.pop("ext-passkey-client-capabilities", None))
-        ui_locale = session.navigator_language()
+        language_getter = getattr(session, "navigator_language", None)
+        if callable(language_getter):
+            ui_locale = str(language_getter() or "en-US")
+        else:
+            # 兼容精简会话/旧任务对象，同时避免因为缺少一个辅助方法而把
+            # ext-oai-did 等整个 authorize 上下文静默丢掉。
+            profile = getattr(session, "browser_profile", {}) or {}
+            ui_locale = str(profile.get("navigator_language") or "en-US")
         required = {
             "ext-oai-did": session.device_id,
             "auth_session_logging_id": session.auth_session_logging_id,

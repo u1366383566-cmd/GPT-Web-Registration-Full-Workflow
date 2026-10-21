@@ -99,6 +99,51 @@ class SessionNavigationHeaderTests(unittest.TestCase):
         self.assertNotIn("referer", headers)
         self.assertNotIn("cache-control", headers)
 
+    def test_chrome146_client_hints_match_curl_impersonation(self):
+        session = BrowserSession(proxy="", detect_exit_geo=False)
+        try:
+            headers = session.get_chatgpt_navigate_headers(referer="")
+            self.assertEqual(
+                headers["sec-ch-ua"],
+                '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+            )
+            self.assertEqual(headers["sec-ch-ua-platform"], '"macOS"')
+            self.assertEqual(headers["sec-ch-ua-mobile"], "?0")
+        finally:
+            session.close()
+
+    def test_browser_sessions_are_independent_without_seed(self):
+        first = BrowserSession(proxy="", detect_exit_geo=False, device_id="device-for-test")
+        second = BrowserSession(proxy="", detect_exit_geo=False, device_id="device-for-test")
+        try:
+            self.assertNotEqual(first.oai_session_id, second.oai_session_id)
+            self.assertNotEqual(first.oai_session_id, first.device_id)
+        finally:
+            first.close()
+            second.close()
+
+    def test_explicit_seed_reuses_fingerprint_across_sessions(self):
+        first = BrowserSession(proxy="", detect_exit_geo=False, fingerprint_seed="registration:user@example.com")
+        second = BrowserSession(proxy="", detect_exit_geo=False, fingerprint_seed="registration:user@example.com")
+        try:
+            self.assertEqual(first.device_id, second.device_id)
+            self.assertEqual(first.oai_session_id, second.oai_session_id)
+            self.assertEqual(first.auth_session_logging_id, second.auth_session_logging_id)
+        finally:
+            first.close()
+            second.close()
+
+    def test_cookie_export_keeps_cf_cookie_and_adds_device_context(self):
+        session = BrowserSession(proxy="", detect_exit_geo=False, device_id="device-cookie-test")
+        try:
+            session.session.cookies.set("__cf_bm", "cf-value", domain="chatgpt.com", path="/")
+            header = session.chatgpt_cookie_header_with_device()
+            self.assertIn("__cf_bm=cf-value", header)
+            self.assertIn("oai-did=device-cookie-test", header)
+            self.assertIn(f"oai-locale={session.navigator_language()}", header)
+        finally:
+            session.close()
+
 
 if __name__ == "__main__":
     unittest.main()

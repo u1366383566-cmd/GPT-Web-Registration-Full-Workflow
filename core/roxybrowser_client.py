@@ -476,7 +476,7 @@ class RoxyBrowserClient:
             from core.proxy_chain import open_proxy_pool_proxy
 
             target_proxy = _proxy_cfg.pick_proxy()
-            proxy_url, relay = open_proxy_pool_proxy(target_proxy)
+            proxy_url, relay = open_proxy_pool_proxy(target_proxy, measure_transport=True)
             self._proxy_pool_relay = relay
             self._proxy_pool_target = str(target_proxy or "").strip()
             if proxy_url:
@@ -484,7 +484,7 @@ class RoxyBrowserClient:
                 body["proxyInfo"] = proxy_info
                 logger.info(
                     "[Roxy] 创建环境启用代理池：target=%s transport=%s type=%s host=%s port=%s",
-                    str(target_proxy or "").strip(), str(proxy_url or "").strip(),
+                    _mask_proxy(target_proxy), _mask_proxy(proxy_url),
                     proxy_info.get("protocol") or proxy_info.get("proxyCategory"),
                     proxy_info.get("host"),
                     proxy_info.get("port"),
@@ -655,14 +655,16 @@ class RoxyBrowserClient:
     def close_proxy_pool_relay(self) -> None:
         relay, self._proxy_pool_relay = self._proxy_pool_relay, None
         if relay is not None:
-            if relay.last_error:
-                logger.warning(
-                    "[Roxy] 代理链最后一次错误：target=%s upstream=%s error=%s",
-                    _mask_proxy(self._proxy_pool_target),
-                    _mask_proxy(getattr(relay.upstream, "raw", "")),
-                    relay.last_error,
-                )
             relay.close()
+            # last_error 是本轮历史错误，不能在成功任务收尾时再次当作当前故障告警。
+            # 未恢复的连接失败已在发生处带 destination 输出 WARNING。
+            targets = relay.traffic_snapshot().get("destinations", [])
+            failed = sum(item.get("failed_connection_count", 0) for item in targets)
+            retries = sum(item.get("connect_retry_count", 0) for item in targets)
+            recovered = sum(item.get("recovered_connection_count", 0) for item in targets)
+            if failed or retries:
+                logger.info("[Roxy] 代理链连接汇总：握手重试=%s，重试恢复=%s，失败连接=%s（失败详情见发生时的 destination 日志）",
+                            retries, recovered, failed)
 
     def proxy_transport_snapshot(self) -> dict | None:
         """返回本轮 Roxy 经本地代理链传输的全浏览器流量。"""

@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from flask import Flask, Response, jsonify, make_response, render_template, request
 import pyotp
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service
+from core import account_inspection_service, codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service
 from core import chatgpt2api_client
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
@@ -123,6 +123,7 @@ def _compact_account_for_list(row: dict) -> dict:
     for key in (
         "user_name", "email_source", "original_email", "note", "archived", "created_at",
         "plan_type", "current_plan_type", "plus_trial_eligible",
+        "eligible_promo_campaigns", "plus_trial_discount_percentage",
         "plan_check_status", "codex_status", "codex_agent_status",
         "totp_setup_status",
     ):
@@ -332,24 +333,30 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     init_auth(app, auth_code=auth_code)
     register_auth_routes(app)
-    recovered_plan_checks = db.recover_interrupted_plan_checks()
-    if recovered_plan_checks:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的套餐查询状态", recovered_plan_checks)
-    recovered_extract_links = db.recover_interrupted_extract_links()
-    if recovered_extract_links:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的提链状态", recovered_extract_links)
-    recovered_live_checks = db.recover_interrupted_live_checks()
-    if recovered_live_checks:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的查活状态", recovered_live_checks)
-    recovered_codex_agents = db.recover_interrupted_codex_agents()
-    if recovered_codex_agents:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex Agent Token 状态", recovered_codex_agents)
-    recovered_totp_setups = db.recover_interrupted_totp_setups()
-    if recovered_totp_setups:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的 2FA 状态", recovered_totp_setups)
-    recovered_email_changes = db.recover_interrupted_email_changes()
-    if recovered_email_changes:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的邮箱换绑状态", recovered_email_changes)
+    with account_inspection_service.startup_recovery_guard() as can_recover:
+        if can_recover:
+            recovered_registration_jobs = db.recover_interrupted_registration_jobs()
+            if recovered_registration_jobs:
+                logger.warning("已释放 %s 个因 WebUI 重启中断的注册任务", recovered_registration_jobs)
+            recovered_plan_checks = db.recover_interrupted_plan_checks()
+            if recovered_plan_checks:
+                logger.warning("已恢复 %s 个因 WebUI 重启中断的套餐查询状态", recovered_plan_checks)
+            recovered_extract_links = db.recover_interrupted_extract_links()
+            if recovered_extract_links:
+                logger.warning("已恢复 %s 个因 WebUI 重启中断的提链状态", recovered_extract_links)
+            db.recover_interrupted_account_inspections()
+            recovered_live_checks = db.recover_interrupted_live_checks()
+            if recovered_live_checks:
+                logger.warning("已恢复 %s 个因 WebUI 重启中断的查活状态", recovered_live_checks)
+            recovered_codex_agents = db.recover_interrupted_codex_agents()
+            if recovered_codex_agents:
+                logger.warning("已恢复 %s 个因 WebUI 重启中断的 Codex Agent Token 状态", recovered_codex_agents)
+            recovered_totp_setups = db.recover_interrupted_totp_setups()
+            if recovered_totp_setups:
+                logger.warning("已恢复 %s 个因 WebUI 重启中断的 2FA 状态", recovered_totp_setups)
+            recovered_email_changes = db.recover_interrupted_email_changes()
+            if recovered_email_changes:
+                logger.warning("已恢复 %s 个因 WebUI 重启中断的邮箱换绑状态", recovered_email_changes)
 
     # ----------------------------------------------------------
     # 页面
@@ -380,7 +387,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         pool = {"total": 0, "available": 0, "used": 0, "failed": 0}
         for src in parse_email_sources(_email_cfg.EMAIL_SOURCE):
             # GPTMail/MailNest/CloudMail 地址按需生成，不属于本地邮箱池。
-            if src in ("gptmail", "mailnest", "cloudmail", "cloudflare"):
+            if src in ("gptmail", "mailnest", "cloudmail", "remail", "xigua", "mailcode", "cloudflare"):
                 continue
             one = (
                 db.generic_api_email_pool_summary() if src == "generic_api"
@@ -674,6 +681,14 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "账号不存在"}), 404
         return jsonify({"ok": True, "deleted": True})
 
+    @app.post("/api/accounts/delete-deactivated")
+    def api_accounts_delete_deactivated():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or data.get("archived") not in ("0", "only", "all"):
+            return jsonify({"ok": False, "error": "请指定 archived：0、only 或 all"}), 400
+        deleted = db.delete_deactivated_accounts(archived=data["archived"])
+        return jsonify({"ok": True, "deleted_count": deleted})
+
     @app.post("/api/accounts/delete-bulk")
     def api_accounts_delete_bulk():
         """批量删除已注册账号记录。Body {account_ids: [...]} 或 {ids: [...]}。"""
@@ -758,7 +773,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         """给单个账号排队换绑邮箱。Body {source}."""
         data = request.get_json(silent=True) or {}
         source = str(data.get("source") or "").strip().lower()
-        allowed = {"outlook", "generic_api", "imap", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail", "remail"}
+        allowed = {"outlook", "generic_api", "imap", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail", "remail", "xigua", "mailcode"}
         if source not in allowed:
             return jsonify({"ok": False, "error": "请选择有效的邮箱来源"}), 400
         acc = db.get_account(acc_id)
@@ -777,7 +792,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         data = request.get_json(silent=True) or {}
         ids = data.get("account_ids") or data.get("ids") or []
         source = str(data.get("source") or "").strip().lower()
-        allowed = {"outlook", "generic_api", "imap", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail", "remail"}
+        allowed = {"outlook", "generic_api", "imap", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail", "remail", "xigua", "mailcode"}
         if source not in allowed:
             return jsonify({"ok": False, "error": "请选择有效的邮箱来源"}), 400
         if not isinstance(ids, list) or not ids:
@@ -940,6 +955,43 @@ def create_app(auth_code: str | None = None) -> Flask:
             "skipped": skipped,
             "skipped_count": len(skipped),
         })
+
+    @app.get("/api/accounts/inspections")
+    def api_account_inspections():
+        try:
+            page = int(request.args.get("page", 1))
+            if not 1 <= page <= 1 + (2**63 - 1) // 20:
+                raise ValueError("page 超出范围")
+        except (ValueError, TypeError):
+            return jsonify({"ok": False, "error": "page 必须为正整数且不能超出范围"}), 400
+        return jsonify({"ok": True, **account_inspection_service.list_inspections(limit=20, offset=(page - 1) * 20)})
+
+    @app.get("/api/accounts/inspections/<int:inspection_id>/failures")
+    def api_account_inspection_failures(inspection_id):
+        try:
+            page = int(request.args.get("page", 1))
+            if not 1 <= page <= 1 + (2**63 - 1) // 20:
+                raise ValueError("page 超出范围")
+        except (ValueError, TypeError):
+            return jsonify({"ok": False, "error": "page 必须为正整数且不能超出范围"}), 400
+        result = db.list_account_inspection_failures(inspection_id, limit=20, offset=(page - 1) * 20)
+        if result is None:
+            return jsonify({"ok": False, "error": "巡检任务不存在"}), 404
+        return jsonify({"ok": True, **result})
+
+    @app.post("/api/accounts/inspections")
+    def api_start_account_inspection():
+        data = request.get_json(silent=True)
+        if request.get_data() and not isinstance(data, dict):
+            return jsonify({"ok": False, "error": "请求体必须是有效的 JSON 对象"}), 400
+        try:
+            run, created = account_inspection_service.start_inspection(
+                workers=(data or {}).get("workers", account_inspection_service.DEFAULT_WORKERS),
+                archived=(data or {}).get("archived", "0"))
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": created, "task": run,
+                        "error": "" if created else "有未完成的巡检任务，请等待完成"}), 202 if created else 409
 
     @app.post("/api/accounts/check-live-bulk")
     def api_accounts_check_live_bulk():
@@ -2741,6 +2793,14 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "ok": False,
                     "error": "已选择 mailcx 邮箱来源，请填写 Mail.cx API Token（配置 → 邮箱 / OTP）。",
                 }), 400
+        if "xigua" in sources:
+            xigua_key = str(getattr(_email_cfg, "XIGUA_API_KEY", "") or "").strip()
+            if not xigua_key:
+                return jsonify({"ok": False, "error": "已选择 xigua 邮箱来源，请填写西瓜 API Key（配置 → 邮箱 / OTP）。"}), 400
+        if "mailcode" in sources:
+            for key, label in (("MAILCODE_API_KEY", "API Key"), ("MAILCODE_PRODUCT_ID", "商品 ID")):
+                if not str(getattr(_email_cfg, key, "") or "").strip():
+                    return jsonify({"ok": False, "error": f"已选择 mailcode 邮箱来源，请填写域名邮箱 MailCode {label}（配置 → 邮箱 / OTP）。"}), 400
         if "remail" in sources:
             api_base = str(getattr(_email_cfg, "REMAIL_API_BASE", "") or "").strip()
             api_key = str(getattr(_email_cfg, "REMAIL_API_KEY", "") or "").strip()
@@ -2775,7 +2835,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "ok": False,
                     "error": "Remail 服务模式只能填写 code 或 purchase（配置 → 邮箱 / OTP）。",
                 }), 400
-        if "gptmail" in sources or "mailnest" in sources or "mailcx" in sources or "cloudmail" in sources or "remail" in sources or "cloudflare" in sources:
+        if "mailcode" in sources or "gptmail" in sources or "mailnest" in sources or "mailcx" in sources or "cloudmail" in sources or "remail" in sources or "xigua" in sources or "cloudflare" in sources:
             # 临时邮箱在任务开始时动态生成，不需要本地邮箱池容量提示。
             warning = ""
         elif "cloudflare_domain" in sources:
@@ -2990,6 +3050,15 @@ def create_app(auth_code: str | None = None) -> Flask:
     def api_config_get():
         return jsonify(config_editor.get_config())
 
+    @app.get("/api/mailcode/catalog")
+    def api_mailcode_catalog():
+        """使用已保存的服务配置查询商品及余额，不购买邮箱。"""
+        from core.mailcode_client import list_products, get_wallet, MailCodeError
+        try:
+            return jsonify({"ok": True, "products": list_products(), "wallet": get_wallet()})
+        except MailCodeError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
     @app.post("/api/cloudmail/gen-token")
     def api_cloudmail_gen_token():
         """手动生成 CloudMail Authorization Token，并把本次填写的 CloudMail 配置一并写入 .env。"""
@@ -3097,6 +3166,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         try:
             import config as _config_pkg
             _config_pkg.reload_all()
+            from core import twofa_service
+            twofa_service.apply_settings()
         except Exception as exc:
             reload_ok = False
             reload_err = f"{type(exc).__name__}: {exc}"

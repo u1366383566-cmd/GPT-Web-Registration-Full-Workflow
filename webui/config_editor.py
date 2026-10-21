@@ -19,6 +19,9 @@ _CONFIG_DIR = _PROJECT_ROOT / "config"
 EXPLICIT_EMPTY_LIST_KEYS = {
     "PROXY_POOL",
 }
+EXPLICIT_EMPTY_STRING_KEYS = {
+    "GENERIC_API_PROXY",
+}
 
 
 # ============================================================
@@ -90,6 +93,10 @@ EDITABLE_FIELDS = [
     {
         "key": "AUTO_PLAN_CHECK_AFTER_REGISTER", "file": "register.py", "type": "bool", "group": "注册方式",
         "label": "注册后自动查套餐", "help": "注册成功后自动入队查询套餐/Plus 资格；关闭后仅保存账号，不自动查套餐",
+    },
+    {
+        "key": "PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL", "file": "register.py", "type": "bool", "group": "注册方式",
+        "label": "同邮箱保持协议指纹", "help": "仅影响纯协议注册；开启后同一邮箱重复任务复用稳定设备指纹，关闭后每次任务创建全新指纹",
     },
 
     # ---- CloakBrowser ----
@@ -321,12 +328,20 @@ EDITABLE_FIELDS = [
         "label": "启用 2FA(TOTP)", "help": "注册完成后自动设置动态口令（会多收一封 OTP 邮件）",
     },
     {
+        "key": "TWOFA_PROXY_MODE", "file": "twofa.py", "type": "str", "group": "功能开关",
+        "label": "2FA代理模式", "help": "saved=优先使用账号保存的代理；pool=忽略保存代理，每次从代理池随机取一个；修改后需重启服务",
+        "choices": [
+            {"value": "saved", "label": "使用账号保存的代理"},
+            {"value": "pool", "label": "每次从代理池随机获取"},
+        ],
+    },
+    {
         "key": "TWOFA_WORKERS", "file": "twofa.py", "type": "int", "group": "功能开关",
-        "label": "2FA并发数", "help": "同时执行的2FA设置任务数，默认4，范围1-16；修改后需重启服务",
+        "label": "2FA并发数", "help": "同时执行的2FA设置任务数，默认4，范围1-16；保存后立即生效",
     },
     {
         "key": "TWOFA_QUEUE_LIMIT", "file": "twofa.py", "type": "int", "group": "功能开关",
-        "label": "2FA队列容量", "help": "允许排队等待的2FA任务总数，默认200",
+        "label": "2FA队列容量", "help": "允许排队和执行中的2FA任务总数，默认200；保存后立即生效",
     },
     {
         "key": "ENABLE_FLOW_TRIGGER", "file": "flow_trigger.py", "type": "bool", "group": "功能开关",
@@ -367,7 +382,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "GENERIC_API_PROXY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
-        "label": "通用 API 取码代理", "help": "仅用于 generic_api 接口取码；默认直接走本地 HTTP 代理 http://127.0.0.1:7897，不读取代理池，也不套用代理池上游链式；留空则直连",
+        "label": "通用 API 取码代理", "help": "仅用于 generic_api 接口取码；不读取注册代理池，也不套用代理池上游链式；留空则直连，例如可填 http://127.0.0.1:7897",
         "storage": "env",
     },
     {
@@ -384,6 +399,8 @@ EDITABLE_FIELDS = [
             {"value": "gptmail", "label": "GPTMail 临时邮箱 API"},
             {"value": "mailnest", "label": "MailNest/迈巢 临时邮箱 API"},
             {"value": "cloudmail", "label": "CloudMail API"},
+            {"value": "xigua", "label": "西瓜邮箱接码平台（按项目下单并自动收取验证码）"},
+            {"value": "mailcode", "label": "域名邮箱 MailCode（幂等购买、准备取码通道、按游标收码）"},
         ],
     },
     {
@@ -520,6 +537,25 @@ EDITABLE_FIELDS = [
         "label": "CloudMail随机名前缀长度", "help": "生成邮箱 local-part 的长度，建议 10-16",
     },
     {
+        "key": "MAILCODE_API_KEY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "MailCode API Key", "help": "在官网 API 密钥页面创建；需要购买和读取权限，密钥保存在 .env；服务地址固定使用官网",
+        "external_url": "https://mailcode.bzb.qzz.io",
+        "external_label": "打开官网",
+        "storage": "env", "secret": True,
+    },
+    {
+        "key": "MAILCODE_PRODUCT_ID", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "MailCode 商品 ID", "help": "查询 /api/open/v1/products 返回的 id；每个注册任务仅购买一个邮箱，不自动切换商品",
+    },
+    {
+        "key": "MAILCODE_REQUEST_TIMEOUT", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "MailCode 请求超时(秒)", "help": "单次 HTTP 请求超时，默认 20 秒",
+    },
+    {
+        "key": "MAILCODE_CHANNEL_WAIT_SECONDS", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "MailCode 通道准备超时(秒)", "help": "购买后先初始化 IMAP 并等待 READY，再将邮箱交给注册流程；默认 60 秒",
+    },
+    {
         "key": "REMAIL_API_BASE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
         "label": "Remail API 地址", "help": "默认 https://remail.aishop6.com；也可填写文档地址 https://remail.aishop6.com/docs",
         "external_url": "https://remail.aishop6.com/register?aff=AFFLGYQMTYIXH",
@@ -562,6 +598,29 @@ EDITABLE_FIELDS = [
         "key": "REMAIL_REQUEST_TIMEOUT", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
         "label": "Remail 请求超时(秒)", "help": "Remail API 单次 HTTP 请求超时，默认 20 秒",
     },
+    {
+        "key": "XIGUA_API_KEY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "西瓜 API Key", "help": "西瓜 API 密钥，选择 xigua 来源时必填，保存在 .env",
+        "storage": "env", "secret": True,
+        "external_url": "https://xigua.dasiqo.com/#register?invite=XGMKWMW4Z7",
+        "external_label": "打开西瓜官网",
+    },
+    {
+        "key": "XIGUA_OFFER_ID", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "西瓜 Offer ID", "help": "手动填写西瓜项目方案的 offer_id",
+    },
+    {
+        "key": "XIGUA_REQUEST_TIMEOUT", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "西瓜请求超时(秒)", "help": "西瓜 API 单次 HTTP 请求超时，默认 20 秒",
+    },
+    {
+        "key": "XIGUA_POLL_ATTEMPTS", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "西瓜轮询次数", "help": "每次等待验证码最多请求次数，默认 10 次",
+    },
+    {
+        "key": "XIGUA_POLL_INTERVAL", "file": "email.py", "type": "int", "group": "邮箱 / OTP",
+        "label": "西瓜轮询间隔(秒)", "help": "西瓜每次查询验证码的间隔，默认 5 秒",
+    },
     # ---- 浏览器地区画像 ----
     {
         "key": "BROWSER_LOCALE_PROFILE", "file": "browser.py", "type": "str", "group": "浏览器画像",
@@ -578,7 +637,11 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "BROWSER_DATA_SAVER_MODE", "file": "browser.py", "type": "bool", "group": "浏览器画像",
-        "label": "本地浏览器省流量模式", "help": "仅 Roxy/Cloak 本地浏览器拦截图片和媒体等可选资源；Browser Use/Skyvern 云端浏览器不启用；默认关闭",
+        "label": "本地浏览器省流量模式", "help": "仅 Roxy/Cloak 拦截可选资源，并通过本地代理中继阻断配置的后台下载域名；Browser Use/Skyvern 不启用；默认关闭",
+    },
+    {
+        "key": "BROWSER_DATA_SAVER_BLOCKED_PROXY_HOSTS", "file": "browser.py", "type": "list_str_multiline", "group": "浏览器画像",
+        "label": "省流量代理域名屏蔽", "help": "仅开启省流量模式且使用本地浏览器代理中继时生效；连接上游前阻断启动/后台下载。每行一个域名（包含子域名），默认 dl.google.com、gvt1.com；填 [] 关闭，不填 URL 或路径",
     },
     {
         "key": "BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES", "file": "browser.py", "type": "list_str_multiline", "group": "浏览器画像",
@@ -1001,10 +1064,16 @@ def get_config() -> list[dict]:
             raw_env_value = env_file_values[key]
             if field["type"] == "list_str_multiline" and key in EXPLICIT_EMPTY_LIST_KEYS and str(raw_env_value).strip() == "":
                 value = []
+            elif field["type"] == "str" and key in EXPLICIT_EMPTY_STRING_KEYS and str(raw_env_value).strip() == "":
+                value = ""
             else:
                 value = _coerce_raw_value(raw_env_value, fallback, field["type"])
         elif os.getenv(key) is not None:
-            value = _coerce_raw_value(os.getenv(key, ""), fallback, field["type"])
+            raw_env_value = os.getenv(key, "")
+            if field["type"] == "str" and key in EXPLICIT_EMPTY_STRING_KEYS and str(raw_env_value).strip() == "":
+                value = ""
+            else:
+                value = _coerce_raw_value(raw_env_value, fallback, field["type"])
         else:
             value = fallback
 
@@ -1169,6 +1238,11 @@ def update_config(updates: dict) -> dict:
         if field is None:
             ignored.append(key)
             continue
+        choices = field.get("choices") or []
+        if choices:
+            allowed = {str(item.get("value")) for item in choices}
+            if str(value) not in allowed:
+                raise ValueError(f"{key} 的值无效，可选：{', '.join(sorted(allowed))}")
         env_updates[key] = _format_env_value(
             value,
             field["type"],

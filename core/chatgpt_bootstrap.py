@@ -13,6 +13,7 @@ from typing import Iterable
 
 from core.session import BrowserSession
 from core.sentinel import generate_requirements_token
+from core.http_diagnostics import response_summary
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,8 @@ def _safe_request(label: str, fn, *, strict: bool = False):
         resp = fn()
         status = int(getattr(resp, "status_code", 0) or 0)
         if status >= 400:
-            raise RuntimeError(f"HTTP {status}: {(getattr(resp, 'text', '') or '')[:180]}")
+            logger.warning("[Bootstrap] %s 请求失败：%s", label, response_summary(resp))
+            raise RuntimeError(f"HTTP {status}")
         return resp
     except Exception as exc:
         if strict:
@@ -237,4 +239,4 @@ def authenticated_bootstrap(session: BrowserSession, access_token: str | None = 
     log_cookies = getattr(session, "log_cookie_names", None)
     if callable(log_cookies):
         log_cookies("authenticated_bootstrap_complete")
-    logger.info("[Bootstrap] 登录态 ChatGPT 预热完成")
+    logger.info("[Bootstrap] 登录态 ChatGPT 可选预热流程结束（允许部分失败）")

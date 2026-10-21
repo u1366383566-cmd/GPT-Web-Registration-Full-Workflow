@@ -16,6 +16,7 @@ from config import twofa as _twofa_cfg
 from config import email as _email_cfg
 from config import roxybrowser as _roxy_cfg
 from config import openai_protocol as _protocol_cfg
+from config import register as _register_cfg
 from core.session import BrowserSession
 from core.chatgpt_auth import get_providers, get_csrf_token, signin_openai
 from core.openai_auth import (
@@ -26,6 +27,11 @@ from core.openai_auth import (
     send_email_otp,
     network_preflight,
     navigate_about_you,
+    navigate_create_account_password,
+    navigate_email_otp_send,
+    request_password_sentinel_bundle,
+    generate_registration_password,
+    register_user,
     EmailOtpInvalidError,
     create_account,
 )
@@ -72,6 +78,14 @@ def configure_logging(verbose: bool = False) -> None:
 def _is_success(result: dict) -> bool:
     """判断单次注册结果是否成功，集中收敛批量统计规则。"""
     return isinstance(result, dict) and bool(result.get("success"))
+
+
+def _protocol_registration_fingerprint_seed(email: str) -> str | None:
+    """按配置决定协议注册是否跨任务复用同邮箱指纹。"""
+    if not bool(getattr(_register_cfg, "PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL", False)):
+        return None
+    identity = str(email or "").strip().lower()
+    return f"registration:{identity}" if identity else None
 
 
 def _finalize_registration_session(
@@ -165,11 +179,11 @@ def run_registration(
     on_email_acquired: Callable[[str], None] | None = None,
 ):
     """
-    执行完整的 ChatGPT 注册流程（OTP-only，无密码）。
+    执行完整的 ChatGPT 邮箱密码注册流程。
 
     OpenAI 当前默认流程：signin 时携带 login_hint+screen_hint=login_or_signup
-    → follow_authorize 重定向链自动落到 /email-verification 并触发 OTP 发送
-    → 用户输入验证码 → validate_email_otp → about-you 提交昵称生日 → 完成。
+    → 进入 /create-account/password 并提交密码 → 发送并验证邮箱 OTP
+    → about-you 提交昵称生日 → 完成。
 
     Args:
         email: 注册邮箱
@@ -246,7 +260,14 @@ def run_registration(
             on_email_acquired(email)
 
     # 创建浏览器会话（proxy=None 时自动从 config.PROXY_POOL 随机抽一个）
-    session = BrowserSession(proxy=proxy)
+    fingerprint_seed = _protocol_registration_fingerprint_seed(email)
+    reuse_fingerprint = fingerprint_seed is not None
+    # 单个 BrowserSession 生命周期内始终复用同一指纹；是否跨任务按邮箱
+    # 稳定复用由 PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL 控制。
+    session = BrowserSession(
+        proxy=proxy,
+        fingerprint_seed=fingerprint_seed,
+    )
 
     # 从代理 URL 中抽取 sid 段做日志，避免把账号密码完整打印
     proxy_label = "无"
@@ -265,10 +286,29 @@ def run_registration(
         birthday = generate_random_birthday()
 
     logger.info(f"[注册] 开始：{email}，代理={proxy_label}")
+    logger.info(
+        "[指纹] 生命周期模式：%s",
+        "同邮箱保持" if reuse_fingerprint else "每次任务重新创建",
+    )
     logger.info(f"[注册] 本次随机生日: {birthday}")
-    logger.debug(f"[注册] 设备ID={session.device_id}，会话日志ID={session.auth_session_logging_id}")
+    fp = session.fingerprint_summary()
+    logger.info(
+        "[指纹] 协议注册统一上下文: device_id=%s oai_session_id=%s auth_session_logging_id=%s "
+        "ua=%s lang=%s tz=%s(%s) screen=%sx%s@%s cpu=%s mem=%s geo=%s:%s",
+        session.device_id[:12] + "...",
+        session.oai_session_id[:12] + "...",
+        session.auth_session_logging_id[:12] + "...",
+        BrowserSession._short_value(fp.get("user_agent"), 72),
+        fp.get("accept_language"),
+        fp.get("timezone_iana"),
+        fp.get("timezone_offset_minutes"),
+        fp.get("screen_width"), fp.get("screen_height"), fp.get("device_pixel_ratio"),
+        fp.get("hardware_concurrency"), fp.get("device_memory"),
+        fp.get("geo_country") or "?", fp.get("geo_city") or "?",
+    )
 
     create_acknowledged = False
+    registration_password = None
     try:
         # 网络预检必须在 signin/follow_authorize 之前完成；预检不带邮箱，不会触发 OTP。
         network_preflight(session)
@@ -296,16 +336,32 @@ def run_registration(
         authorize_url = signin_openai(session, csrf_token, email)
         human_delay("api")
 
-        # 记录"OTP 触发"前的时间戳，自动取信箱时只看此后的邮件，
-        # 避免取到上次注册留下的旧 OTP。
-        otp_after_ts = time.time()
-
         # ==================== 阶段2: OpenAI Auth ====================
         # 步骤4: 跟随 authorize URL（建立 auth.openai.com 的 cookies）
-        # 由于步骤3已携带 login_hint + screen_hint=login_or_signup，
-        # 重定向链会直接走到 /email-verification 并自动触发 OTP 发送，
-        # 不需要 /create-account/password、register_user、单独 send_email_otp 调用。
-        follow_authorize(session, authorize_url)
+        authorize_final_url = follow_authorize(session, authorize_url)
+        human_delay("navigate")
+
+        # 步骤5-8: 强制走邮箱+密码注册，不使用 passwordless OTP-only 分支。
+        navigate_create_account_password(session, authorize_final_url)
+        human_delay("navigate")
+        registration_password = generate_registration_password()
+        password_sentinel = request_password_sentinel_bundle(session)
+        password_sentinel_header, password_so_header = build_sentinel_header(
+            session, password_sentinel, "username_password_create"
+        )
+        human_delay("challenge")
+        register_result = register_user(
+            session,
+            email,
+            registration_password,
+            password_sentinel_header,
+            password_so_header,
+        )
+        create_acknowledged = True
+
+        # 只读取本次发送之后到达的验证码，避免误取历史邮件。
+        otp_after_ts = time.time()
+        navigate_email_otp_send(session, register_result.get("continue_url"))
         human_delay("navigate")
 
         # ==================== 阶段3: 验证码验证 ====================
@@ -511,6 +567,7 @@ def run_registration(
                 "device_id": session.device_id,
                 "sentinel_sid": getattr(session, "sentinel_sid", None),
                 "browser_profile": getattr(session, "browser_profile", None),
+                "registration_password": registration_password,
                 "codex": codex_result,
             },
         )

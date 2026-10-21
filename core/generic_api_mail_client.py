@@ -22,7 +22,6 @@ from urllib.parse import quote, unquote, urlparse, urlunparse, parse_qsl, urlenc
 import requests
 
 from config import email as _email_cfg
-from config import proxy as _proxy_cfg  # 兼容旧调用方及可测试的代理池回退
 from core.otp_utils import extract_otp
 
 logger = logging.getLogger(__name__)
@@ -825,9 +824,6 @@ def fetch_latest_otp(
         )
 
     selected_proxy = str(getattr(_email_cfg, "GENERIC_API_PROXY", "") or "").strip()
-    # 兼容旧版配置：未设置通用 API 专用代理时沿用代理池；专用代理优先。
-    if not selected_proxy:
-        selected_proxy = str(_proxy_cfg.pick_proxy() or "").strip()
     routes: list[tuple[str, str]] = []
     if selected_proxy:
         routes.append(("generic_api_local_proxy", selected_proxy))

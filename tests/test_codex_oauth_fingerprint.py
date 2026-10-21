@@ -28,6 +28,38 @@ class _CodexSession:
 
 
 class CodexOauthFingerprintTests(unittest.TestCase):
+    def test_protocol_fingerprint_warmup_reuses_session_and_observes_document(self):
+        class Session:
+            def __init__(self):
+                self.calls = []
+                self.observed = []
+                self.reset_count = 0
+
+            def get_chatgpt_navigate_headers(self, **kwargs):
+                self.header_kwargs = kwargs
+                return {"sec-fetch-site": "none"}
+
+            def get(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                return SimpleNamespace(status_code=200, text="<html></html>", url=url)
+
+            def observe_chatgpt_document(self, response):
+                self.observed.append(response)
+
+            def reset_circuit_breaker(self):
+                self.reset_count += 1
+
+        session = Session()
+        with patch("core.chatgpt_bootstrap.anonymous_bootstrap") as bootstrap:
+            codex._codex_protocol_fingerprint_warmup(session)
+
+        self.assertEqual(session.calls[0][0], "https://chatgpt.com/auth/login")
+        self.assertEqual(session.header_kwargs, {"referer": "", "user_initiated": False})
+        self.assertEqual(len(session.observed), 1)
+        self.assertEqual(session.observed[0].url, "https://chatgpt.com/auth/login")
+        bootstrap.assert_called_once_with(session, strict=False)
+        self.assertEqual(session.reset_count, 1)
+
     def test_auth_preflight_retries_403_in_same_session(self):
         session = _CodexSession()
         with patch.object(codex.time, "sleep") as sleep:

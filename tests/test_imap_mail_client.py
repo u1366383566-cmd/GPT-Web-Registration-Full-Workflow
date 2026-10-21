@@ -42,9 +42,9 @@ class ImapMailClientTests(unittest.TestCase):
         mail.select.return_value = ("OK", [])
         with patch.object(imap_client.imaplib, "IMAP4", return_value=mail) as constructor:
             self.assertIs(imap_client._connect(account), mail)
-        constructor.assert_called_once_with("imap.example.com", 143)
+        constructor.assert_called_once_with("imap.example.com", 143, timeout=10.0)
         mail.login.assert_called_once_with("user@example.com", "pw")
-        mail.select.assert_called_once_with("INBOX")
+        mail.select.assert_called_once_with("INBOX", readonly=True)
 
     def test_webui_can_import_imap_material(self):
         with tempfile.TemporaryDirectory() as td, patch.multiple(db, **self._storage_patches(Path(td))):
@@ -92,6 +92,86 @@ class ImapMailClientTests(unittest.TestCase):
              patch.object(imap_client.time, "time", return_value=now):
             self.assertEqual(imap_client.fetch_latest_otp("user@example.com", after_ts=now - 10, max_wait=3,
                                                           poll_interval=1, settle_seconds=0), "654321")
+
+    def test_failed_login_closes_socket(self):
+        account = imap_client.ImapEmailAccount("user@example.com", "pw", "imap.example.com")
+        mail = MagicMock()
+        mail.login.side_effect = imap_client.imaplib.IMAP4.error("bad credentials")
+        with patch.object(imap_client.imaplib, "IMAP4_SSL", return_value=mail):
+            with self.assertRaisesRegex(imap_client.ImapMailError, "登录失败"):
+                imap_client._connect(account)
+        mail.shutdown.assert_called_once()
+
+    def test_uid_batch_fetch_does_not_mark_seen(self):
+        from datetime import datetime, timezone
+        mail = MagicMock()
+        raw = b"From: noreply@openai.com\r\nTo: user@example.com\r\nSubject: Your code is 654321\r\n\r\n654321"
+        mail.uid.side_effect = [("OK", [b"1 2"]), ("OK", [(b"2 (BODY[]", raw), b")"])]
+        result = imap_client._search_messages(mail, datetime(2026, 10, 13, tzinfo=timezone.utc))
+        self.assertEqual(result[0]["subject"], "Your code is 654321")
+        self.assertEqual(mail.uid.call_args_list[0].args, ("search", None, "(SINCE 13-Oct-2026)"))
+        self.assertEqual(mail.uid.call_args_list[1].args, ("fetch", b"1,2", "(BODY.PEEK[])"))
+
+    def test_zero_timestamp_accepts_old_mail(self):
+        account = imap_client.ImapEmailAccount("user@example.com", "pw", "imap.example.com")
+        mail = MagicMock()
+        message = {"to": account.email, "from": "noreply@openai.com", "subject": "Code 654321",
+                   "date": "2020-01-01T00:00:00Z"}
+        with patch.object(imap_client, "get_account_context", return_value=account), \
+             patch.object(imap_client, "_connect", return_value=mail), \
+             patch.object(imap_client, "_search_messages", return_value=[message]) as search:
+            self.assertEqual(imap_client.fetch_latest_otp(account.email, after_ts=0, max_wait=5,
+                                                          settle_seconds=0), "654321")
+        self.assertIsNone(search.call_args.args[1])
+        mail.shutdown.assert_called_once()
+
+    def test_polling_reuses_connection_and_reconnects_after_socket_failure(self):
+        account = imap_client.ImapEmailAccount("user@example.com", "pw", "imap.example.com")
+        first, second = MagicMock(), MagicMock()
+        clock = [0.0]
+        message = {"to": account.email, "from": "noreply@openai.com", "subject": "Code 654321"}
+        with patch.object(imap_client, "get_account_context", return_value=account), \
+             patch.object(imap_client, "_connect", side_effect=[first, second]) as connect, \
+             patch.object(imap_client, "_search_messages", side_effect=[[], OSError("reset"), [message]]) as search, \
+             patch.object(imap_client.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(imap_client.time, "sleep", side_effect=lambda n: clock.__setitem__(0, clock[0] + n)):
+            self.assertEqual(imap_client.fetch_latest_otp(account.email, after_ts=0, max_wait=10,
+                                                          poll_interval=1, settle_seconds=0), "654321")
+        self.assertEqual(connect.call_count, 2)
+        self.assertEqual([c.args[0] for c in search.call_args_list], [first, first, second])
+        first.shutdown.assert_called_once()
+        second.shutdown.assert_called_once()
+
+    def test_deadline_caps_socket_timeout_and_retry_sleep(self):
+        account = imap_client.ImapEmailAccount("user@example.com", "pw", "imap.example.com")
+        clock = [100.0]
+        with patch.object(imap_client.time, "monotonic", side_effect=lambda: clock[0]):
+            self.assertEqual(imap_client._operation_timeout(102.0), 2.0)
+            with self.assertRaises(TimeoutError):
+                imap_client._operation_timeout(100.0)
+        with patch.object(imap_client, "get_account_context", return_value=account), \
+             patch.object(imap_client, "_connect", side_effect=imap_client.ImapMailError("连接失败")), \
+             patch.object(imap_client.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(imap_client.time, "sleep", side_effect=lambda n: clock.__setitem__(0, clock[0] + n)):
+            with self.assertRaisesRegex(imap_client.ImapMailError, "最后取件错误.*连接失败"):
+                imap_client.fetch_latest_otp(account.email, max_wait=2, poll_interval=10)
+        self.assertEqual(clock[0], 102.0)
+
+    def test_settle_picks_newer_code_without_reconnecting(self):
+        account = imap_client.ImapEmailAccount("user@example.com", "pw", "imap.example.com")
+        mail = MagicMock()
+        clock = [0.0]
+        older = {"to": account.email, "from": "noreply@openai.com", "subject": "Code 111111",
+                 "date": "2026-10-13T10:44:00Z"}
+        newer = dict(older, subject="Code 222222", date="2026-10-13T10:45:00Z")
+        with patch.object(imap_client, "get_account_context", return_value=account), \
+             patch.object(imap_client, "_connect", return_value=mail) as connect, \
+             patch.object(imap_client, "_search_messages", side_effect=[[older], [newer], [newer]]), \
+             patch.object(imap_client.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(imap_client.time, "sleep", side_effect=lambda n: clock.__setitem__(0, clock[0] + n)):
+            self.assertEqual(imap_client.fetch_latest_otp(account.email, after_ts=0, max_wait=10,
+                                                          poll_interval=1, settle_seconds=2), "222222")
+        connect.assert_called_once()
 
 
 if __name__ == "__main__":

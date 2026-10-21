@@ -4,9 +4,9 @@ import logging
 import json
 import threading
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from core import db
 from core.session import BrowserSession, close_browser_session
@@ -72,12 +72,24 @@ def _new_fingerprint_pinned_session(
     state = fingerprint_state if fingerprint_state is not None else {}
     saved_profile = state.get("browser_profile")
     identity = str(email).strip().lower()
-    # 每个查活任务生成一次独立 seed；同一任务内所有阶段/重试复用，下一任务及
-    # 其他账号均不会继承该组 device/session/sentinel 标识。
-    fingerprint_seed = str(state.get("fingerprint_seed") or "").strip()
-    if not fingerprint_seed:
-        fingerprint_seed = f"live-check:{identity}:{uuid.uuid4()}"
-        state["fingerprint_seed"] = fingerprint_seed
+    # 和协议注册使用同一套生命周期配置：开启“同邮箱保持协议指纹”时，
+    # 查活可重新构造注册阶段的 device/session/硬件画像；关闭时每次查活
+    # 生成独立 seed。无论哪种模式，同一任务内部的所有阶段/重试都固定。
+    fingerprint_seed = str(state.get("fingerprint_seed") or "").strip() or None
+    if not state.get("fingerprint_initialized"):
+        from config import register as register_cfg
+        reuse_by_email = bool(
+            getattr(register_cfg, "PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL", False)
+        ) and not bool(state.get("force_fresh"))
+        # “每次重新创建”必须和协议注册完全一致：不传 seed，让 BrowserSession
+        # 生成真实的随机 UUID4。旧实现先生成随机 seed 再派生 UUID5，虽然值也
+        # 随机，但 UUID version 位与注册时不同，属于可观测的指纹差异。
+        fingerprint_seed = f"registration:{identity}" if reuse_by_email else None
+        state["fingerprint_seed"] = fingerprint_seed or ""
+        state["fingerprint_mode"] = (
+            "registration_email_stable" if reuse_by_email else "fresh_per_check"
+        )
+        state["fingerprint_initialized"] = True
     session = BrowserSession(
         proxy=proxy,
         # 首次按当前出口生成地区画像；同一路由内部如需重建则原样复用。
@@ -98,6 +110,13 @@ def _new_fingerprint_pinned_session(
         if isinstance(generated_profile, dict):
             state["browser_profile"] = dict(generated_profile)
     return session
+
+
+def _fingerprint_mode_label(state: dict) -> str:
+    mode = str(state.get("fingerprint_mode") or "")
+    if mode == "registration_email_stable":
+        return "同邮箱复用协议注册指纹"
+    return "每次查活重新创建"
 
 
 def _warm_login_fingerprint_context(session: BrowserSession) -> None:
@@ -151,6 +170,7 @@ def _network_preflight_with_retry(
     # 一次网络预检只创建一个 BrowserSession。403 响应下发的新 __cf_bm、
     # OAuth/设备上下文都保留在同一 Cookie Jar 中供下一轮使用。
     session = _new_fingerprint_pinned_session(email, proxy, state)
+    logger.info("[查活] 指纹生命周期：%s", _fingerprint_mode_label(state))
     for attempt in range(1, max_attempts + 1):
         logger.info(
             "[查活] 复用统一会话：proxy=%s device_id=%s oai_session_id=%s（网络预检第 %s/%s 次）",
@@ -573,21 +593,29 @@ def _login_via_full_web_flow(
         proxy,
         fingerprint_state=fingerprint_state,
     )
-    otp_after_ts = time.time()
-    final_url = follow_authorize(session, authorize_url)
-    dead_code = detect_account_unusable_text(final_url)
-    if dead_code:
-        raise AccountUnusableError(
-            f"账号已废弃（{dead_code}）",
-            error_code=dead_code,
+    # 预检返回后本函数持有会话；只有成功返回才把释放责任移交给上层。
+    try:
+        otp_after_ts = time.time()
+        final_url = follow_authorize(session, authorize_url)
+        dead_code = detect_account_unusable_text(final_url)
+        if dead_code:
+            raise AccountUnusableError(
+                f"账号已废弃（{dead_code}）",
+                error_code=dead_code,
+            )
+        session_info = _login_via_password_or_otp(
+            session,
+            email,
+            otp_after_ts,
+            email_source=email_source,
         )
-    session_info = _login_via_password_or_otp(
-        session,
-        email,
-        otp_after_ts,
-        email_source=email_source,
-    )
-    return session, session_info
+        return session, session_info
+    except BaseException:
+        try:
+            close_browser_session(session)
+        except Exception:
+            logger.warning("[查活] 登录失败后的会话清理异常", exc_info=True)
+        raise
 
 
 def log_path(email: str) -> Path:
@@ -654,9 +682,10 @@ def check_account_liveness(
     clear_log: bool = True,
     email_source: str | None = None,
     fingerprint_state: dict | None = None,
+    on_authenticated: Callable[[dict, BrowserSession], dict] | None = None,
 ) -> dict:
     """
-    重新登录账号并刷新最新 accessToken。
+    重新登录账号并刷新最新 accessToken，关闭会话前在原会话查询套餐。
 
     返回：
       {
@@ -665,6 +694,7 @@ def check_account_liveness(
         access_token: str?,
         session: dict?,
         checked_at: ISO,
+        plan_result: dict?,  # 查活成功时的同会话套餐查询结果；失败不影响查活 ok
         error: str?
       }
     """
@@ -707,6 +737,10 @@ def check_account_liveness(
             # 避免把 MFA challenge 误当成邮箱 OTP 页面。
             logger.info("[查活] 流程：登录态预热 → CSRF → Reauth Signin → Authorize → 邮箱 OTP → OAuth callback → Session/AT")
             session = _new_fingerprint_pinned_session(email, proxy, task_fingerprint_state)
+            logger.info(
+                "[查活] 指纹生命周期：%s",
+                _fingerprint_mode_label(task_fingerprint_state),
+            )
             logger.info(
                 "[查活] 会话创建完成：proxy=%s device_id=%s（复用2FA稳定链路）",
                 session.proxy or "直连/配置随机",
@@ -764,7 +798,7 @@ def check_account_liveness(
         account = session_info.get("account") or {}
         logger.info("[查活] 正常：%s user_id=%s plan=%s", email, user.get("id"), account.get("planType"))
         fp = _safe_fingerprint_for_account(session)
-        return {
+        result = {
             "ok": True,
             "status": "live",
             "checked_at": checked_at,
@@ -774,6 +808,18 @@ def check_account_liveness(
             "fingerprint": fp,
             "fingerprint_text": _safe_fingerprint_text_for_account(session),
         }
+        if on_authenticated is not None:
+            return on_authenticated(result, session)
+        # 直接调用底层查活时也自动查询；业务队列通过 hook 先落库新 AT，再统一占用套餐任务。
+        try:
+            from core.chatgpt_plan import check_account_plan
+            from core.plan_check_service import _wait_for_rate_slot
+            _wait_for_rate_slot()
+            result["plan_result"] = check_account_plan(access_token, session=session)
+        except Exception as exc:
+            result["plan_result"] = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        return result
+
     except AccountUnusableError as exc:
         code = getattr(exc, "error_code", "") or detect_account_unusable_text(str(exc)) or "account_deactivated"
         logger.warning("[查活] 已废号：%s %s", email, code)
@@ -795,7 +841,11 @@ def check_account_liveness(
                     pass
             if fh is not None:
                 root_logger.removeHandler(fh)
-                fh.close()
+                try:
+                    fh.close()
+                except Exception:
+                    # 已保存的查活/套餐结果不应被日志文件关闭异常覆盖。
+                    logger.warning("[查活] 日志文件关闭失败", exc_info=True)
         finally:
             with _RUNNING_LOCK:
                 _RUNNING.discard(key)

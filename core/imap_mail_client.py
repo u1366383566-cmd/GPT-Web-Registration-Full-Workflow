@@ -77,43 +77,90 @@ def release_account(email: str, status: str = "available", note: str | None = No
         _CONTEXT_CACHE.pop(str(email or "").lower(), None)
 
 
-def _connect(account: ImapEmailAccount):
+def _operation_timeout(deadline: float | None = None) -> float:
+    timeout = max(0.1, float(getattr(_email_cfg, "IMAP_SOCKET_TIMEOUT", 10)))
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("IMAP 取码等待时间已耗尽")
+        timeout = min(timeout, remaining)
+    return timeout
+
+
+def _set_timeout(mail, deadline: float | None = None) -> None:
+    timeout = _operation_timeout(deadline)
+    if getattr(mail, "sock", None) is not None:
+        mail.sock.settimeout(timeout)
+
+
+def _disconnect(mail) -> None:
+    # shutdown 只关闭本地 socket；网络异常时不再阻塞等待 LOGOUT 响应。
+    if mail is not None:
+        try:
+            mail.shutdown()
+        except Exception:
+            pass
+
+
+def _connect(account: ImapEmailAccount, deadline: float | None = None):
     if not account.server or not account.password:
         raise ImapMailError(f"{account.email} 的 IMAP 服务器或密码为空")
+    mail = None
+    phase = "连接/TLS"
     try:
         cls = imaplib.IMAP4_SSL if account.use_ssl else imaplib.IMAP4
-        mail = cls(account.server, account.port)
+        mail = cls(account.server, account.port, timeout=_operation_timeout(deadline))
+        phase = "登录"
+        _set_timeout(mail, deadline)
         mail.login(account.username or account.email, account.password)
-        status, _ = mail.select(account.mailbox or "INBOX")
+        phase = "打开目录"
+        _set_timeout(mail, deadline)
+        status, _ = mail.select(account.mailbox or "INBOX", readonly=True)
         if status != "OK":
             raise ImapMailError(f"无法打开邮箱目录 {account.mailbox!r}")
         return mail
-    except ImapMailError:
-        raise
-    except imaplib.IMAP4.error as exc:
-        raise ImapMailError(f"IMAP 登录失败: {exc}") from exc
     except Exception as exc:
-        raise ImapMailError(f"IMAP 连接失败: {exc}") from exc
+        _disconnect(mail)
+        if isinstance(exc, ImapMailError):
+            raise
+        raise ImapMailError(f"IMAP {phase}失败: {type(exc).__name__}: {exc}") from exc
 
 
-def _search_messages(mail, after_dt: datetime) -> list[dict]:
-    status, result = mail.search(None, f'(SINCE {after_dt.strftime("%d-%b-%Y")})')
+def _search_messages(mail, after_dt: datetime | None, deadline: float | None = None) -> list[dict]:
+    # IMAP 日期月份必须使用英文缩写，不能受服务器 locale 影响。
+    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    criteria = "ALL" if after_dt is None else (
+        f'(SINCE {after_dt.day:02d}-{months[after_dt.month - 1]}-{after_dt.year})'
+    )
+    _set_timeout(mail, deadline)
+    status, result = mail.uid("search", None, criteria)
     if status != "OK":
-        return []
+        raise ImapMailError("IMAP 搜索邮件失败")
     ids = result[0].split() if result and result[0] else []
+    if not ids:
+        return []
+    # UID 避免邮件被删除时序号漂移；批量读取最新 20 封，减少网络往返。
+    _set_timeout(mail, deadline)
+    status, data = mail.uid("fetch", b",".join(ids[-20:]), "(BODY.PEEK[])")
+    if status != "OK":
+        raise ImapMailError("IMAP 读取邮件失败")
     messages: list[dict] = []
-    for message_id in ids[-20:]:
-        status, data = mail.fetch(message_id, "(RFC822)")
-        if status != "OK" or not data:
-            continue
-        raw = next((part[1] for part in data if isinstance(part, tuple) and len(part) > 1), None)
-        if not raw:
+    for part in data or []:
+        if not isinstance(part, tuple) or len(part) < 2 or not isinstance(part[1], bytes):
             continue
         try:
-            messages.append(_msg_to_dict(email_lib.message_from_bytes(raw)))
+            messages.append(_msg_to_dict(email_lib.message_from_bytes(part[1])))
         except Exception as exc:
-            logger.debug("[IMAP] 邮件解析失败 id=%r: %s", message_id, exc)
+            logger.debug("[IMAP] 邮件解析失败: %s", exc)
     return messages
+
+
+def _message_timestamp(item: dict) -> float:
+    raw_ts = item.get("date") or item.get("receivedDateTime") or ""
+    try:
+        return datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError, AttributeError):
+        return 0.0
 
 
 def fetch_latest_otp(
@@ -126,54 +173,76 @@ def fetch_latest_otp(
     account = get_account_context(email)
     if account is None:
         raise ImapMailError(f"邮箱池中找不到 IMAP 账号: {email}")
-    after_ts = float(after_ts or time.time())
+    after_ts = float(time.time() if after_ts is None else after_ts)
     max_wait = int(max_wait if max_wait is not None else _email_cfg.OTP_MAX_WAIT)
     interval = int(poll_interval if poll_interval is not None else _email_cfg.OTP_POLL_INTERVAL)
     settle = int(settle_seconds if settle_seconds is not None else _email_cfg.OTP_SETTLE_SECONDS)
-    deadline = time.time() + max_wait
-    after_dt = datetime.fromtimestamp(after_ts - 30, tz=timezone.utc)
+    deadline = time.monotonic() + max(0, max_wait)
+    # 显式 0 表示宽松取最近一条，不能被当作当前时间。
+    after_dt = datetime.fromtimestamp(after_ts - 30, tz=timezone.utc) if after_ts > 0 else None
     best_otp, best_ts, settle_until = None, 0.0, None
+    last_error = None
+    mail = None
+    rounds = 0
 
-    logger.info("[IMAP] 开始轮询 %s (%s:%s, SSL=%s)", email, account.server, account.port, account.use_ssl)
-    while time.time() < deadline:
-        mail = None
-        try:
-            mail = _connect(account)
-            messages = _search_messages(mail, after_dt)
-        except ImapMailError as exc:
-            logger.warning("[IMAP] %s", exc)
-            messages = []
-        finally:
-            if mail is not None:
-                try:
-                    mail.logout()
-                except Exception:
-                    pass
-
-        messages.sort(key=lambda item: item.get("date") or "", reverse=True)
-        for item in messages:
-            recipient = " ".join(str(item.get(k) or "") for k in ("to", "deliveredTo", "xOriginalTo")).lower()
-            if email.lower() not in recipient or not looks_like_openai_email(item):
-                continue
-            otp = extract_otp(item)
-            if not otp:
-                continue
-            raw_ts = item.get("date") or item.get("receivedDateTime") or ""
+    logger.info("[IMAP] 开始轮询 %s (%s:%s, SSL=%s, mailbox=%s, wait=%ss)",
+                email, account.server, account.port, account.use_ssl, account.mailbox, max_wait)
+    try:
+        while time.monotonic() < deadline:
+            if best_otp and settle_until is not None and time.monotonic() >= settle_until:
+                return best_otp
+            rounds += 1
             try:
-                ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).timestamp()
-            except Exception:
-                ts = 0.0
-            if ts and ts < after_ts - 30:
-                continue
-            if ts >= best_ts:
-                if otp != best_otp:
-                    best_otp, best_ts, settle_until = otp, ts, time.time() + settle
-                    logger.info("[IMAP] 锁定候选 OTP=%s，等待 %ss settle", otp, settle)
-            break
-        if best_otp and settle_until is not None and time.time() >= settle_until:
-            return best_otp
-        time.sleep(max(1, interval))
+                if mail is None:
+                    mail = _connect(account, deadline=deadline)
+                messages = _search_messages(mail, after_dt, deadline=deadline)
+            except (ImapMailError, imaplib.IMAP4.error, OSError, EOFError, TimeoutError) as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                logger.warning("[IMAP] 第 %s 轮取件失败，剩余 %.1fs: %s",
+                               rounds, max(0, deadline - time.monotonic()), last_error)
+                _disconnect(mail)
+                mail = None
+                messages = []
+
+            messages.sort(key=_message_timestamp, reverse=True)
+            rejected = {"recipient": 0, "sender": 0, "code": 0, "old": 0}
+            for item in messages:
+                recipient = " ".join(str(item.get(k) or "") for k in ("to", "deliveredTo", "xOriginalTo")).lower()
+                if email.lower() not in recipient:
+                    rejected["recipient"] += 1
+                    continue
+                if not looks_like_openai_email(item):
+                    rejected["sender"] += 1
+                    continue
+                otp = extract_otp(item)
+                if not otp:
+                    rejected["code"] += 1
+                    continue
+                ts = _message_timestamp(item)
+                if after_ts > 0 and ts and ts < after_ts - 30:
+                    rejected["old"] += 1
+                    continue
+                if ts >= best_ts:
+                    if otp != best_otp:
+                        best_otp, settle_until = otp, time.monotonic() + max(0, settle)
+                        logger.info("[IMAP] 锁定候选验证码，等待 %ss settle", settle)
+                    best_ts = ts
+                break
+            logger.debug("[IMAP] 第 %s 轮读取 %s 封，过滤统计=%s", rounds, len(messages), rejected)
+            if best_otp and settle_until is not None and time.monotonic() >= settle_until:
+                return best_otp
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            delay = min(max(1, interval), remaining)
+            if settle_until is not None:
+                delay = min(delay, max(0, settle_until - time.monotonic()))
+            if delay > 0:
+                time.sleep(delay)
+    finally:
+        _disconnect(mail)
 
     if best_otp:
         return best_otp
-    raise ImapMailError(f"等待 {email} 的 OTP 超时（>{max_wait}s）")
+    detail = f"，最后取件错误: {last_error}" if last_error else "，请检查目录、收件人和邮件时间"
+    raise ImapMailError(f"等待 {email} 的 OTP 超时（>{max_wait}s）{detail}")

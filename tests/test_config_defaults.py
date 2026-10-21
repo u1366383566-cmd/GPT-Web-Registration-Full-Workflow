@@ -56,6 +56,18 @@ class ConfigDefaultFallbackTests(unittest.TestCase):
 
         self.assertEqual(namespace["PROXY_POOL"], [])
 
+    def test_generic_api_proxy_blank_env_value_means_direct(self):
+        old_loaded = env_loader._LOADED
+        env_loader._LOADED = True
+        namespace = {"GENERIC_API_PROXY": "http://127.0.0.1:7897"}
+        try:
+            with patch.dict(os.environ, {"GENERIC_API_PROXY": ""}, clear=True):
+                env_loader.apply_env_overrides(namespace, {"GENERIC_API_PROXY": "str"})
+        finally:
+            env_loader._LOADED = old_loaded
+
+        self.assertEqual(namespace["GENERIC_API_PROXY"], "")
+
     def test_config_editor_formats_empty_list_as_literal_empty_list(self):
         self.assertEqual(config_editor._format_env_value([], "list_str_multiline"), "[]")
 

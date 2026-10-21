@@ -222,7 +222,7 @@ class BrowserSession:
         # 参考真实前端会话：语言不仅体现在 Accept-Language/oai-language，也写入
         # 同一个 Cookie Jar，避免代理为 JP 但 Cookie 仍泄漏默认地区。
         locale = self.navigator_language()
-        for domain in ("chatgpt.com", "auth.openai.com"):
+        for domain in ("chatgpt.com", "auth.openai.com", "sentinel.openai.com"):
             self.session.cookies.set("oai-locale", locale, domain=domain, path="/")
 
         # Cloudflare 状态只能来自真实响应 Set-Cookie；这里仅记录变化，不主动伪造/覆盖。
@@ -371,10 +371,25 @@ class BrowserSession:
         return "; ".join(pairs)
 
     def auth_cookie_header(self) -> str:
-        return self._cookie_header_for_domain("auth.openai.com") or f"oai-did={self.device_id}"
+        return self._cookie_header_with_device("auth.openai.com")
 
     def chatgpt_cookie_header(self) -> str:
-        return self._cookie_header_for_domain("chatgpt.com") or f"oai-did={self.device_id}"
+        return self._cookie_header_with_device("chatgpt.com")
+
+    def _cookie_header_with_device(self, domain: str) -> str:
+        """导出 Cookie，并确保设备/语言 cookie 不会因 Jar 合并而丢失。"""
+        existing = self._cookie_header_for_domain(domain)
+        pairs = [p.strip() for p in existing.split(";") if p.strip()]
+        names = {p.split("=", 1)[0].strip() for p in pairs if "=" in p}
+        if "oai-did" not in names:
+            pairs.append(f"oai-did={self.device_id}")
+        if "oai-locale" not in names:
+            pairs.append(f"oai-locale={self.navigator_language()}")
+        return "; ".join(pairs)
+
+    def chatgpt_cookie_header_with_device(self) -> str:
+        """兼容提链项目的显式 API，供需要手工 Cookie 头的调用点使用。"""
+        return self._cookie_header_with_device("chatgpt.com")
 
     def _detect_exit_geo(self) -> dict:
         """通过当前代理检测出口 IP 地理信息；失败返回空 dict 并回退到默认地区画像。"""

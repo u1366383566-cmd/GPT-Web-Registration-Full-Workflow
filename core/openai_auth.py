@@ -172,6 +172,14 @@ def _is_retryable_authorize_error(exc: Exception) -> bool:
     )
 
 
+def _exception_http_status(exc: Exception) -> int:
+    """尽量从 curl/requests 风格异常中读取 HTTP 状态码。"""
+    try:
+        return int(getattr(getattr(exc, "response", None), "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _reset_retryable_circuit(session: BrowserSession) -> None:
     """仅清除本地熔断，保留当前 Session 的 Cookie Jar 和完整身份上下文。"""
     reset = getattr(session, "reset_circuit_breaker", None)
@@ -279,6 +287,18 @@ def follow_authorize(session: BrowserSession, authorize_url: str) -> str:
             return final_url
         except Exception as exc:
             last_exc = exc
+            if _exception_http_status(exc) == 403:
+                if attempt >= max_attempts:
+                    logger.warning("[步骤4] authorize HTTP 403，已达到最大重试次数")
+                    raise
+                _reset_retryable_circuit(session)
+                backoff = retry_delay * (2 ** (attempt - 1))
+                logger.warning(
+                    "[步骤4] authorize HTTP 403，保留当前指纹和 Cookie，%.1fs 后重试 (%s/%s)",
+                    backoff, attempt, max_attempts,
+                )
+                time.sleep(backoff)
+                continue
             if not _is_retryable_authorize_error(exc):
                 # 非临时性错误（比如 4xx 业务错误）直接抛出，不重试
                 raise
@@ -543,6 +563,31 @@ def generate_registration_password(length: int = 14) -> str:
     chars.extend(secrets.choice(alphabet) for _ in range(length - len(chars)))
     random.SystemRandom().shuffle(chars)
     return "".join(chars)
+
+
+def navigate_create_account_password(
+    session: BrowserSession,
+    current_url: str | None = None,
+) -> str:
+    """进入注册密码页，确保协议注册不再走无密码 OTP 分支。"""
+    current = str(current_url or "")
+    if "/create-account/password" in current:
+        return current
+
+    url = "https://auth.openai.com/create-account/password"
+    referer = current if current.startswith("https://auth.openai.com/") else "https://auth.openai.com/"
+    headers = session.get_auth_navigate_headers(referer=referer)
+    headers["sec-fetch-site"] = "same-origin"
+    headers["sec-fetch-user"] = "?1"
+    logger.info("[步骤5] 切换到创建账号密码页...")
+    resp = session.get(url, headers=headers, allow_redirects=True)
+    resp.raise_for_status()
+    _rotate_document_navigation_id(session)
+    final_url = str(getattr(resp, "url", "") or url)
+    if "/create-account/password" not in final_url:
+        raise RuntimeError(f"无法进入注册密码页，最终落点: {final_url}")
+    logger.info("[步骤5] 已进入创建账号密码页")
+    return final_url
 
 
 def register_user(

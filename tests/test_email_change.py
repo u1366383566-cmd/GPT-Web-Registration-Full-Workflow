@@ -150,6 +150,8 @@ class EmailChangeTests(unittest.TestCase):
              patch("core.account_liveness._login_via_password_or_otp", return_value=session_info) as login, \
              patch("core.account_liveness._safe_fingerprint_for_account", return_value={"geo_country": "JP"}), \
              patch("core.account_liveness._safe_fingerprint_text_for_account", return_value="geo=JP"), \
+             patch.object(email_change_service.db, "get_account", return_value={"email": "new@example.com", "access_token": ""}), \
+             patch("core.plan_check_service.check_account_plan_in_session", return_value={"ok": True}) as plan, \
              patch.object(email_change_service.db, "update_account_liveness", return_value=True) as update, \
              patch.object(email_change_service, "_append_log"):
             result = email_change_service._check_live_in_current_session(
@@ -165,7 +167,9 @@ class EmailChangeTests(unittest.TestCase):
         follow.assert_called_once_with(session, "https://auth/authorize")
         self.assertIs(login.call_args.args[0], session)
         self.assertEqual(login.call_args.kwargs["email_source"], "imap")
-        update.assert_called_once_with(67, result)
+        update.assert_called_once_with(67, result, expected_account={"email": "new@example.com", "access_token": ""}, expected_run_id=None)
+        self.assertTrue(result["plan_result"]["ok"])
+        self.assertIs(plan.call_args.kwargs["session"], session)
 
     def test_begin_skips_reauth_when_existing_token_is_recent(self):
         session = MagicMock()

@@ -32,6 +32,11 @@ CHATGPT2API_NEW_IMPORT_TIMEOUT = 20
 # 一键导入目标：legacy=旧版；new=新版；both=旧版+新版。
 CHATGPT2API_IMPORT_TARGET = "legacy"
 
+# 纯协议注册指纹生命周期：
+#   False = 每次注册任务创建全新的 device/session/浏览器画像（默认）
+#   True  = 同一邮箱重复注册或补跑时复用稳定指纹；不同邮箱仍彼此独立
+PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL = False
+
 # 注册成功并拿到 accessToken 后，在浏览器里随机停留一段时间再关闭连接。
 # 格式：最小秒,最大秒。设为 "0,0" 表示不额外停留。
 POST_REGISTER_DWELL_SECONDS_RANGE = "5,15"
@@ -48,5 +53,6 @@ apply_env_overrides(globals(), {
     'CHATGPT2API_NEW_AUTH_KEY': 'str',
     'CHATGPT2API_NEW_IMPORT_TIMEOUT': 'int',
     'CHATGPT2API_IMPORT_TARGET': 'str',
+    'PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL': 'bool',
     'POST_REGISTER_DWELL_SECONDS_RANGE': 'str',
 })
