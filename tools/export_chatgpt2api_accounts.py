@@ -7,7 +7,8 @@ accounts JSON 数组。
     {"tokens": [...]} 或 {"accounts": [ {...}, ... ]}
 accounts 里的条目只要求 access_token 必填，其余字段原样保留；
 quota / limits_progress / success / fail 等运行时字段由反代导入后自动刷新填充，
-因此这里只导出注册侧真正有数据的字段。
+因此这里只导出注册侧真正有数据的字段。注册代理不随账号导出，
+生图项目使用其自身的网络配置。
 
 用法：
     python tools/export_chatgpt2api_accounts.py                # 全部账号 → 导出_反代账号.json
@@ -67,7 +68,6 @@ def to_chatgpt2api_item(payload: dict) -> dict | None:
         "user_id": str(payload.get("user_id") or "").strip(),
         "type": plan_type or "free",
         "status": "正常",
-        "proxy": str(payload.get("proxy_used") or "").strip(),
         "source_type": "web",
     }
 

@@ -526,7 +526,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         """把勾选的未归档账号导出为 chatgpt2api(反代旧版) 可批量导入的 JSON 数组。
 
         反代导入接口只要求 access_token 必填，quota/limits_progress 等运行时字段
-        由反代导入后自动刷新填充，这里只导出注册侧真正有数据的字段。
+        由反代导入后自动刷新填充。注册代理只用于本地注册，不随账号导出；
+        生图项目使用其自身的网络配置。
         """
         data = request.get_json(silent=True) or {}
         raw_ids = data.get("account_ids") or data.get("ids") or []
@@ -565,7 +566,6 @@ def create_app(auth_code: str | None = None) -> Flask:
                 "user_id": str(acc.get("user_id") or "").strip(),
                 "type": plan_type or "free",
                 "status": "正常",
-                "proxy": str(acc.get("proxy_used") or "").strip(),
                 "source_type": "web",
             })
         return jsonify({"ok": True, "count": len(items), "items": items, "skipped": skipped})
