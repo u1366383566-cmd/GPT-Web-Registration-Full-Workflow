@@ -2285,6 +2285,7 @@
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnDownloadSelectedFullExportV2" disabled title="把选中账号按“邮箱---邮箱接码API---密码---https://2fa.run/----2FA:密钥”格式导出为 TXT 文件">完整导出</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedFullExportV2" disabled title="把选中账号的“邮箱---邮箱接码API---密码---https://2fa.run/----2FA:密钥”格式复制到剪贴板">复制完整导出</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedLoginCredentialsV2" disabled title="把选中账号按“邮箱---密码---2FA密钥”格式复制到剪贴板">复制登录凭据</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExportSelectedChatgpt2apiV2" disabled title="把勾选的账号导出为「GPT网页额度反代旧版(chatgpt2api)」可批量导入的 JSON 文件">导出反代JSON</button>
           <button type="button" class="jobs-tb-btn" id="btnArchiveSelectedAccountsV2" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档选中</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedAccountsV2" disabled title="删除选中的本地账号/token记录">删除</button>
         </div>
@@ -3677,7 +3678,7 @@ function updateAccountSelectionUi(pageRows = null) {
     'btnCheckSelectedPlansV2', 'btnExtractSelectedLinksV2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnSetupSelectedTotpV2', 'btnChangeSelectedEmailsV2', 'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedTokensV2', 'btnCopySelectedEmailsV2',
-    'btnDownloadSelectedTxtV2', 'btnDownloadSelectedFullExportV2', 'btnCopySelectedFullExportV2', 'btnCopySelectedLoginCredentialsV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
+    'btnDownloadSelectedTxtV2', 'btnDownloadSelectedFullExportV2', 'btnCopySelectedFullExportV2', 'btnCopySelectedLoginCredentialsV2', 'btnExportSelectedChatgpt2apiV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
   ];
   v2Ids.forEach(id => {
     const el = document.getElementById(id);
@@ -4513,6 +4514,32 @@ async function copySelectedAccountFullExport() {
   showToast(`已复制 ${lines.length} 个账号完整导出`);
 }
 
+async function exportSelectedAccountsChatgpt2apiJson() {
+  const ids = Array.from(ACCOUNT_SELECTED).map(Number);
+  if (!ids.length) { showToast('请先勾选要导出的账号'); return; }
+  const btn = $('#btnExportSelectedChatgpt2apiV2');
+  btn.disabled = true;
+  try {
+    const r = await api('/api/accounts/export-chatgpt2api', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({account_ids: ids})});
+    const items = r.items || [];
+    if (!items.length) { showToast('勾选的账号没有可导出内容（未归档且已有 Token）'); return; }
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const filename = `chatgpt2api-accounts-${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.json`;
+    const blob = new Blob([JSON.stringify(items, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
+    const skippedN = (r.skipped || []).length;
+    showToast(`已导出 ${items.length} 个账号（反代旧版导入格式）` + (skippedN ? `，跳过 ${skippedN} 个` : ''));
+  } catch (e) { showToast('导出反代JSON失败: ' + e.message); }
+  finally { btn.disabled = false; }
+}
+
 async function copySelectedAccountLoginCredentials() {
   const ids = Array.from(ACCOUNT_SELECTED).map(Number);
   if (!ids.length) { showToast('请先选择账号'); return; }
@@ -5140,6 +5167,7 @@ $('#emailChangeModalV2').addEventListener('click', e => { if (e.target.id === 'e
   bind('btnDownloadSelectedFullExportV2', downloadSelectedAccountFullExport);
   bind('btnCopySelectedFullExportV2', copySelectedAccountFullExport);
   bind('btnCopySelectedLoginCredentialsV2', copySelectedAccountLoginCredentials);
+  bind('btnExportSelectedChatgpt2apiV2', exportSelectedAccountsChatgpt2apiJson);
   bind('btnArchiveSelectedAccountsV2', archiveSelectedAccounts);
   bind('btnDeleteSelectedAccountsV2', deleteSelectedAccounts);
 })();

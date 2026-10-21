@@ -514,6 +514,55 @@ def create_app(auth_code: str | None = None) -> Flask:
                 skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "值为空"})
         return jsonify({"ok": True, "field": field, "values": values, "count": len(values), "skipped": skipped})
 
+    @app.post("/api/accounts/export-chatgpt2api")
+    def api_accounts_export_chatgpt2api():
+        """把勾选的未归档账号导出为 chatgpt2api(反代旧版) 可批量导入的 JSON 数组。
+
+        反代导入接口只要求 access_token 必填，quota/limits_progress 等运行时字段
+        由反代导入后自动刷新填充，这里只导出注册侧真正有数据的字段。
+        """
+        data = request.get_json(silent=True) or {}
+        raw_ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return jsonify({"ok": False, "error": "请先勾选要导出的账号"}), 400
+        items, skipped, seen = [], [], set()
+        for raw_id in raw_ids[:5000]:
+            try:
+                account_id = int(raw_id)
+            except (TypeError, ValueError):
+                skipped.append({"id": raw_id, "reason": "ID 非法"})
+                continue
+            if account_id in seen:
+                continue
+            seen.add(account_id)
+            acc = db.get_account(account_id)
+            if not acc:
+                skipped.append({"id": account_id, "reason": "账号不存在"})
+                continue
+            if acc.get("archived"):
+                skipped.append({"id": account_id, "reason": "账号已归档"})
+                continue
+            access_token = str(acc.get("access_token") or "").strip()
+            if not access_token:
+                skipped.append({"id": account_id, "email": acc.get("email"), "reason": "无 access_token"})
+                continue
+            created_at = str(acc.get("created_at") or "").strip()
+            if "T" in created_at:
+                # 反代侧 created_at 形如 "YYYY-MM-DD HH:MM:SS"，注册库是 ISO 带 T
+                created_at = created_at.replace("T", " ")[:19]
+            plan_type = str(acc.get("current_plan_type") or acc.get("plan_type") or "free").strip()
+            items.append({
+                "created_at": created_at,
+                "access_token": access_token,
+                "email": str(acc.get("email") or "").strip(),
+                "user_id": str(acc.get("user_id") or "").strip(),
+                "type": plan_type or "free",
+                "status": "正常",
+                "proxy": str(acc.get("proxy_used") or "").strip(),
+                "source_type": "web",
+            })
+        return jsonify({"ok": True, "count": len(items), "items": items, "skipped": skipped})
+
     @app.post("/api/accounts/import-chatgpt2api")
     def api_accounts_import_chatgpt2api():
         data = request.get_json(silent=True) or {}
