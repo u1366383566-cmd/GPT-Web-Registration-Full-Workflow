@@ -89,3 +89,7 @@ webui.log
 webui.pid
 logs/
 run/
+
+# 本地导出的敏感数据（含 token，禁止入库）
+导出_*.txt
+导出_*.json
