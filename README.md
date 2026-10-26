@@ -2,13 +2,30 @@
 
 ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目支持三套注册驱动：
 
-- **protocol**：原纯协议注册，基于 `curl_cffi` + Sentinel/PoW。
+- **protocol**：原纯协议注册，可选 `curl_cffi` / `wreq` + Sentinel/PoW。
 - **roxy**：RoxyBrowser 指纹浏览器 + Selenium 自动化注册，兼容新版页面流，例如 `create-account/password`、`about-you` 年龄/生日表单、地区本地化页面等。
 - **cloak**：CloakBrowser + Playwright 适配层自动化注册，支持免费 binary、无头模式、humanize、固定 fingerprint seed、代理 geoip。
 - **browser_use**：Browser Use Cloud stealth Chromium + Playwright（可选住宅代理，无需本机安装 Roxy）。
 - **skyvern**：Skyvern Browser Sessions 云端浏览器 + Playwright CDP。
 
 项目提供 **CLI** 和 **本地 WebUI** 两种使用方式。日常推荐使用 WebUI。
+
+### 协议 HTTP 客户端
+
+WebUI → 配置 → 功能开关 → **纯协议 HTTP 客户端**，选择 `curl_cffi`（默认）或 `wreq`。也可在 `.env` 设置：
+
+```dotenv
+PROTOCOL_HTTP_CLIENT="wreq"
+CURL_CFFI_IMPERSONATE="chrome146"
+WREQ_EMULATION="chrome146"
+```
+
+新旧 WebUI 均提供 **curl_cffi 浏览器协议**、**wreq 浏览器协议** 下拉框，两个后端独立保存。可选值按本机已安装库版本生成，当前开放桌面 Chrome、Edge、Firefox、Safari 的具体版本，不提供自动漂移别名或移动端配置。切换时同步基础 UA、浏览器系列与 Client Hints；这不是完整的浏览器 JS 环境模拟。
+
+安装依赖：`python -m pip install -r requirements.txt`。`wreq` 需要 Python >=3.11，低版本 Python 请使用 `curl_cffi`。
+
+保存后新建的 `BrowserSession` 使用所选后端；已运行的会话保持不变。该选项影响纯协议注册、后台开启 2FA 等使用 `BrowserSession` 的流程，不改变 Roxy 等浏览器注册驱动，也不替换其他模块直接使用的 HTTP 客户端。两种后端都不执行 JS/Turnstile 交互式验证，切换后端不保证消除 CF 403。
+
 
 > 项目说明：本项目基于 [xiaoguzuiniu/gpt-free-register](https://github.com/xiaoguzuiniu/gpt-free-register) 进行改造与扩展。
 

@@ -2,7 +2,7 @@
 """
 注册任务服务层：
     - 线程池并发执行 run_registration
-    - 每个任务在 data/registration_jobs.json 里有一条记录
+    - 每个任务在 SQLite registration_jobs 表里有一条记录
     - 每个任务的日志写到 data/logs/<job_uuid>.log，便于 Web UI 实时尾巴
 
 使用：
@@ -40,11 +40,20 @@ class StopRequested(RuntimeError):
     """用户手动停止注册任务。"""
 
 
-def _activate_job(job_id: int) -> None:
-    _THREAD_CTX.job_id = int(job_id)
+def _activate_job(job_id: int) -> bool:
+    """同一锁内完成数据库原子领取和运行实例登记，避免取消/停止的启动窗口。"""
     with _STOP_LOCK:
-        _STOP_EVENTS.setdefault(int(job_id), threading.Event())
+        if int(job_id) in _ACTIVE_JOBS:
+            return False
+        if not db.update_job(
+            job_id, status='running', started_at=datetime.now().isoformat(timespec='seconds'),
+            expected_statuses=('pending',),
+        ):
+            return False
+        _THREAD_CTX.job_id = int(job_id)
+        _STOP_EVENTS[int(job_id)] = threading.Event()
         _ACTIVE_JOBS.add(int(job_id))
+    return True
 
 
 def _deactivate_job(job_id: int) -> None:
@@ -275,21 +284,9 @@ class _JobLogContext:
 def _run_one_job(job_id: int, log_file: str) -> None:
     """单任务入口（线程池里跑这个）。"""
     log_logger = logging.getLogger(__name__)
-    _activate_job(job_id)
-
-    # 取消检查：用户可能在任务排队期间点了"取消排队"，把 status 改成了 cancelled。
-    # 因为 Future 已经 submit 进线程池无法撤回，只能在真正执行前自检一下，跳过 cancelled 的。
-    current = db.get_job(job_id)
-    if not current:
-        log_logger.info(f"[Job {job_id}] 任务记录已删除，跳过执行")
-        _deactivate_job(job_id)
+    if not _activate_job(job_id):
+        log_logger.info("[Job %s] 任务不存在、已取消/结束或已被领取，跳过执行", job_id)
         return
-    if current.get("status") == "cancelled":
-        log_logger.info(f"[Job {job_id}] 已被用户取消，跳过执行")
-        _deactivate_job(job_id)
-        return
-
-    db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
 
     email: str | None = None
     try:
@@ -316,7 +313,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 _release_unconsumed_job_email(email, "用户手动停止")
                 db.update_job(
                     job_id,
-                    status="stopped",
+                    status="stopped", expected_statuses=("running", "stopping"),
                     network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
                     error="用户手动停止",
                     completed_at=datetime.now().isoformat(timespec="seconds"),
@@ -326,7 +323,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             if isinstance(result, dict) and result.get("success"):
                 db.update_job(
                     job_id,
-                    status="success",
+                    status="success", expected_statuses=("running", "stopping"),
                     email=result.get("email"),
                     account_id=result.get("account_id"),
                     network_traffic=result.get("network_traffic"),
@@ -339,7 +336,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 result_email = (result or {}).get("email") if isinstance(result, dict) else None
                 db.update_job(
                     job_id,
-                    status="failed",
+                    status="failed", expected_statuses=("running", "stopping"),
                     email=result_email,
                     account_id=(result or {}).get("account_id") if isinstance(result, dict) else None,
                     network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
@@ -357,7 +354,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
         db.update_job(
             job_id,
-            status="stopped",
+            status="stopped", expected_statuses=("running", "stopping"),
             error="用户手动停止",
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
@@ -371,7 +368,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
             log_logger.warning(f"[Job {job_id}] 停止中捕获异常，按停止处理: {type(exc).__name__}: {exc}")
             db.update_job(
                 job_id,
-                status="stopped",
+                status="stopped", expected_statuses=("running", "stopping"),
                 error="用户手动停止",
                 completed_at=datetime.now().isoformat(timespec="seconds"),
             )
@@ -379,7 +376,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
         log_logger.exception(f"[Job {job_id}] 异常")
         db.update_job(
             job_id,
-            status="failed",
+            status="failed", expected_statuses=("running", "stopping"),
             error=f"{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
@@ -389,14 +386,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
 
 def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int) -> None:
     """把 Codex 补跑作为标准任务执行，并复用任务状态、日志和停止入口。"""
-    _activate_job(job_id)
-    current = db.get_job(job_id)
-    if not current or current.get("status") == "cancelled":
-        codex_retry_service.release(email)
-        _deactivate_job(job_id)
+    if not _activate_job(job_id):
+        # 重复 Future 不得释放仍由运行实例持有的邮箱 reservation。
+        current = db.get_job(job_id)
+        if not current or current.get("status") not in ("running", "stopping"):
+            codex_retry_service.release(email)
         return
 
-    db.update_job(job_id, status="running", started_at=datetime.now().isoformat(timespec="seconds"))
     try:
         result = codex_retry_service.run_worker(
             email,
@@ -405,11 +401,11 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
         )
         now_iso = datetime.now().isoformat(timespec="seconds")
         if is_stop_requested(job_id) or result.get("status") == "stopped":
-            db.update_job(job_id, status="stopped", email=email, account_id=account_id, error=str(result.get("message") or "用户手动停止")[:500], completed_at=now_iso)
+            db.update_job(job_id, status="stopped", expected_statuses=("running", "stopping"), email=email, account_id=account_id, error=str(result.get("message") or "用户手动停止")[:500], completed_at=now_iso)
         elif result.get("ok"):
             db.update_job(
                 job_id,
-                status="success",
+                status="success", expected_statuses=("running", "stopping"),
                 email=email,
                 account_id=account_id,
                 completed_at=now_iso,
@@ -417,7 +413,7 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
         else:
             db.update_job(
                 job_id,
-                status="failed",
+                status="failed", expected_statuses=("running", "stopping"),
                 email=email,
                 account_id=account_id,
                 error=str(result.get("message") or "Codex 补跑失败")[:500],
@@ -426,7 +422,7 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
     except Exception as exc:
         db.update_job(
             job_id,
-            status="failed",
+            status="failed", expected_statuses=("running", "stopping"),
             error=f"{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
@@ -457,20 +453,20 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
     with _executor_lock:
         executor = get_executor(max_workers=workers)
         effective_workers = get_executor_workers()
-        jobs = []
-        for _ in range(count):
-            job = db.create_job(email_source=email_source)
+        jobs = db.create_jobs(count=count, email_source=email_source)
+        for job in jobs:
             try:
                 executor.submit(_run_one_job, job["id"], job["log_file"])
             except Exception as exc:
                 db.update_job(
                     int(job["id"]),
-                    status="failed",
+                    status="failed", expected_statuses=("pending",),
                     error=f"队列提交失败：{type(exc).__name__}: {exc}"[:500],
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 logger.exception("[Service] 注册任务 #%s 提交线程池失败", job["id"])
-            jobs.append(db.get_job(int(job["id"])) or job)
+        latest = {row['id']: row for row in db.get_jobs_by_ids([int(job['id']) for job in jobs])}
+        jobs = [latest.get(job['id'], job) for job in jobs]
     logger.info(f"[Service] 已提交 {count} 个注册任务，源={email_source}，workers={effective_workers}")
     return jobs
 
@@ -488,7 +484,7 @@ def _account_for_job(job: dict) -> dict | None:
     return db.get_account_by_email(email) if email else None
 
 
-def get_retry_info(job: dict) -> dict:
+def get_retry_info(job: dict, *, context: dict | None = None) -> dict:
     """返回给 API/UI 的重试能力描述，不依赖前端猜测错误阶段。"""
     status = str(job.get("status") or "")
     info = {
@@ -501,13 +497,14 @@ def get_retry_info(job: dict) -> dict:
     if status not in ("failed", "stopped", "cancelled"):
         return info
 
-    successful_retry = db.get_successful_retry_for_job(int(job.get("id") or 0))
+    successful_retry = (context.get('successful_retry') if context is not None
+                        else db.get_successful_retry_for_job(int(job.get("id") or 0)))
     if successful_retry is not None:
         info["retry_reason"] = f"后续重试任务 #{successful_retry.get('id')} 已成功"
         info["successful_retry_job_id"] = successful_retry.get("id")
         return info
 
-    account = _account_for_job(job)
+    account = context.get('account') if context is not None else _account_for_job(job)
     if account and job.get("account_id") is not None and status in ("failed", "stopped"):
         info["display_status"] = "success" if (account.get("codex_status") or "") == "success" else "partial_success"
 
@@ -532,6 +529,12 @@ def get_retry_info(job: dict) -> dict:
         "retry_label": "重试",
     })
     return info
+
+
+def enrich_jobs_retry_info(jobs: list[dict]) -> None:
+    contexts = db.get_job_retry_context(jobs)
+    for job in jobs:
+        job.update(get_retry_info(job, context=contexts.get(int(job['id']), {})))
 
 
 def retry_job(job_id: int, workers: int | None = None) -> dict:
@@ -602,7 +605,7 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
             db.update_account_codex_status(email, "failed", f"队列提交失败：{type(exc).__name__}: {exc}"[:500])
         db.update_job(
             int(job["id"]),
-            status="failed",
+            status="failed", expected_statuses=("pending",),
             error=f"队列提交失败：{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
@@ -626,20 +629,9 @@ def cancel_pending_jobs() -> int:
     已经在 running 的任务不动（线程池中无法中途打断）。
     返回成功取消的数量。
 
-    实际"不执行"的保证在 _run_one_job 开头——它真要跑起来时会先看 status 决定是否跳过。
+    worker 启动时仅能原子领取 pending 任务，已取消任务不会继续执行。
     """
-    jobs = db.list_jobs(limit=1000)
-    cancelled = 0
-    now_iso = datetime.now().isoformat(timespec="seconds")
-    for job in jobs:
-        if job.get("status") == "pending":
-            db.update_job(
-                int(job["id"]),
-                status="cancelled",
-                completed_at=now_iso,
-                error="用户手动取消",
-            )
-            cancelled += 1
+    cancelled = db.cancel_pending_registration_jobs()
     logger.info(f"[Service] 已取消 {cancelled} 个排队任务")
     return cancelled
 
@@ -652,7 +644,9 @@ def request_stop_job(job_id: int) -> dict:
     status = job.get("status")
     now_iso = datetime.now().isoformat(timespec="seconds")
     if status == "pending":
-        db.update_job(job_id, status="cancelled", completed_at=now_iso, error="用户手动停止/取消排队")
+        if not db.update_job(job_id, status="cancelled", completed_at=now_iso,
+                             error="用户手动停止/取消排队", expected_statuses=("pending",)):
+            return request_stop_job(job_id)
         _append_job_log(job_id, "用户手动停止：任务尚未运行，已取消排队。")
         return {"ok": True, "message": "排队任务已取消", "job_id": job_id, "state": "cancelled"}
     if status in ("success", "failed", "cancelled", "stopped"):
@@ -669,12 +663,11 @@ def request_stop_job(job_id: int) -> dict:
             with _STOP_LOCK:
                 _STOP_EVENTS.pop(int(job_id), None)
                 _ACTIVE_JOBS.discard(int(job_id))
-            db.update_job(
-                job_id,
-                status="stopped",
-                completed_at=now_iso,
-                error="用户手动停止（任务实例不存在）",
-            )
+            if not db.update_job(
+                job_id, status="stopped", completed_at=now_iso,
+                error="用户手动停止（任务实例不存在）", expected_statuses=("running", "stopping"),
+            ):
+                return request_stop_job(job_id)
             _release_unconsumed_job_email(
                 str(job.get("email") or "").strip() or None,
                 "任务实例不存在，确认未继续执行",
@@ -682,7 +675,9 @@ def request_stop_job(job_id: int) -> dict:
             _append_job_log(job_id, "用户手动停止：未找到运行中的任务实例，已直接标记为已停止。")
             logger.warning("[Service] 用户停止任务 #%s：任务实例不存在，已直接标记 stopped", job_id)
             return {"ok": True, "message": "任务实例不存在，已直接标记为已停止", "job_id": job_id, "state": "stopped"}
-        db.update_job(job_id, status="stopping", error="用户手动停止中")
+        if not db.update_job(job_id, status="stopping", error="用户手动停止中",
+                             expected_statuses=("running", "stopping")):
+            return request_stop_job(job_id)
         _append_job_log(job_id, "用户手动停止：已发送停止信号，任务会在当前步骤检查点退出。")
         logger.warning("[Service] 用户请求停止任务 #%s", job_id)
         return {"ok": True, "message": "已发送停止信号", "job_id": job_id, "state": "stopping"}

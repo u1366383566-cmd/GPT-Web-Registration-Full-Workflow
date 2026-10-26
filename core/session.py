@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-curl_cffi Session 封装
+可选 curl_cffi / wreq 的协议 Session 封装
 统一管理 Cookie、请求头和 TLS 指纹
 """
 import logging
@@ -76,7 +76,7 @@ def _seeded_browser_profile(seed: str, geo: dict | None = None) -> dict:
 class BrowserSession:
     """
     模拟 Chrome 浏览器的 HTTP 会话管理器。
-    使用 curl_cffi 的 impersonate 功能绕过 Cloudflare TLS 指纹检测。
+    通过 curl_cffi / wreq 模拟浏览器 TLS 指纹，不负责执行交互式挑战。
     """
 
     def __init__(
@@ -182,8 +182,23 @@ class BrowserSession:
             self.react_container_key = "__reactContainer$" + uuid.uuid4().hex[:11]
         self.react_resources_key = "__reactResources$" + self.react_container_key.split("$", 1)[1]
 
-        # 创建 curl_cffi 会话
-        self.session = Session(impersonate=IMPERSONATE)
+        # 每个会话固定后端；Web 配置热更新只影响后续新会话。
+        from config import browser as browser_cfg
+        self.http_client = str(browser_cfg.PROTOCOL_HTTP_CLIENT).strip().lower()
+        from core.protocol_profiles import validate_protocol_profile, align_browser_profile
+        self.impersonate = (browser_cfg.CURL_CFFI_IMPERSONATE if self.http_client == "curl_cffi"
+                            else browser_cfg.WREQ_EMULATION)
+        self.impersonate = validate_protocol_profile(self.http_client, str(self.impersonate).strip())
+        if self.http_client == "curl_cffi":
+            self.session = Session(impersonate=self.impersonate)
+        elif self.http_client == "wreq":
+            from core.wreq_session import WreqSession
+            self.session = WreqSession(impersonate=self.impersonate)
+        else:
+            raise ValueError(f"未知协议 HTTP 客户端: {self.http_client}")
+        logger.info("[协议会话] HTTP 客户端=%s 指纹=%s 实际实现=%s.%s",
+                    self.http_client, self.impersonate,
+                    type(self.session).__module__, type(self.session).__name__)
 
         # 设置代理
         if transport_proxy:
@@ -207,6 +222,7 @@ class BrowserSession:
             self.browser_profile = dict(browser_profile)
         else:
             self.browser_profile = dict(_seeded_browser_profile(self.fingerprint_seed, self.exit_geo))
+        self.browser_profile = align_browser_profile(self.browser_profile, self.impersonate)
         self.browser_profile["react_listening_key"] = self.react_listening_key
         self.browser_profile["react_container_key"] = self.react_container_key
         self.browser_profile["react_resources_key"] = self.react_resources_key

@@ -2683,16 +2683,15 @@ def create_app(auth_code: str | None = None) -> Flask:
             rows = result.get("items") or []
             for row in rows:
                 row["manual_otp_required"] = manual_otp_required
-                row.update(svc.get_retry_info(row))
+            svc.enrich_jobs_retry_info(rows)
             result.update({"ok": True, "page": page, "page_size": page_size})
             result["items"] = [_compact_job_for_list(r) for r in rows]
-            result["status_counts"] = db.job_status_counts()
             result["compact"] = True
             return jsonify(result)
         rows = db.list_jobs(limit=max(1, int(limit or 1)))
         for row in rows:
             row["manual_otp_required"] = manual_otp_required
-            row.update(svc.get_retry_info(row))
+        svc.enrich_jobs_retry_info(rows)
         return jsonify(rows)
 
     @app.post("/api/jobs")

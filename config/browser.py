@@ -37,6 +37,11 @@ MAC_OS_UA_VERSION = "10_15_7"
 # 必须同步为 146；不能出现 TLS=146、HTTP/JS=149 的跨版本拼接指纹。
 IMPERSONATE = "chrome146"
 
+# BrowserSession 的协议传输后端；不改变 Roxy 等真实浏览器驱动。
+PROTOCOL_HTTP_CLIENT = "curl_cffi"
+CURL_CFFI_IMPERSONATE = "chrome146"
+WREQ_EMULATION = "chrome146"
+
 # ---------- 桌面 Chrome 画像 ----------
 BROWSER_FAMILY = "chrome"
 BROWSER_OS = "macOS"
@@ -391,6 +396,9 @@ def validate_browser_profile(profile: dict) -> list[str]:
             issues.append("Safari UA 不一致")
         if profile.get("send_client_hints"):
             issues.append("Safari 不应发送 Chromium Client Hints")
+    elif family == "firefox":
+        if "Firefox/" not in ua or profile.get("send_client_hints"):
+            issues.append("Firefox UA / Client Hints 不一致")
     elif f"Chrome/{profile.get('chrome_full_version')}" not in ua:
         issues.append("UA 与 chrome_full_version 不一致")
     if profile.get("browser_os") == "macOS":
@@ -409,7 +417,7 @@ def validate_browser_profile(profile: dict) -> list[str]:
     return issues
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool', 'BROWSER_DATA_SAVER_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_PROXY_HOSTS': 'list_str_multiline', 'BROWSER_DATA_SAVER_DEEP_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES': 'list_str_multiline', 'BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS': 'list_str_multiline', 'BROWSER_TRAFFIC_DETAIL_LOG': 'bool', 'BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES': 'int', 'BROWSER_JS_COVERAGE_LOG': 'bool', 'BROWSER_JS_COVERAGE_MAX_ENTRIES': 'int'})
+apply_env_overrides(globals(), {'PROTOCOL_HTTP_CLIENT': 'str', 'CURL_CFFI_IMPERSONATE': 'str', 'WREQ_EMULATION': 'str', 'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool', 'BROWSER_DATA_SAVER_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_PROXY_HOSTS': 'list_str_multiline', 'BROWSER_DATA_SAVER_DEEP_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES': 'list_str_multiline', 'BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS': 'list_str_multiline', 'BROWSER_TRAFFIC_DETAIL_LOG': 'bool', 'BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES': 'int', 'BROWSER_JS_COVERAGE_LOG': 'bool', 'BROWSER_JS_COVERAGE_MAX_ENTRIES': 'int'})
 
 # WebUI 可能保存国家码（如 GB），而画像池内部使用小写区域键（gb）。
 # 这些派生值必须在读取 .env 覆盖后重新计算。

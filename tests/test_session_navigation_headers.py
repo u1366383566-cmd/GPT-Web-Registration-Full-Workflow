@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import unittest
+from unittest.mock import patch
+from config import browser
 
 from config.browser import build_browser_environment
 from core.session import BrowserSession
@@ -100,7 +102,9 @@ class SessionNavigationHeaderTests(unittest.TestCase):
         self.assertNotIn("cache-control", headers)
 
     def test_chrome146_client_hints_match_curl_impersonation(self):
-        session = BrowserSession(proxy="", detect_exit_geo=False)
+        # 固定此用例的协议版本，不能受开发机 Web/.env 当前选择影响。
+        with patch.multiple(browser, PROTOCOL_HTTP_CLIENT="curl_cffi", CURL_CFFI_IMPERSONATE="chrome146"):
+            session = BrowserSession(proxy="", detect_exit_geo=False)
         try:
             headers = session.get_chatgpt_navigate_headers(referer="")
             self.assertEqual(

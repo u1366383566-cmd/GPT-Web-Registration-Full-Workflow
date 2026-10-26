@@ -190,6 +190,11 @@ def _ensure_sqlite() -> None:
                 conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_archived ON {table}(archived, id DESC)")
                 conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_email ON {table}(email COLLATE NOCASE)")
                 conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_created ON {table}(created_at DESC)")
+            # registration_jobs 由 CREATE TABLE AS 建立，id 并不是主键，需显式索引。
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_registration_jobs_id ON registration_jobs(id DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_registration_jobs_updated ON registration_jobs(updated_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_registration_jobs_root_status ON registration_jobs(CAST(json_extract(payload, '$.root_job_id') AS INTEGER), status, id DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_accounts_email_lower ON accounts(account_email_lower(email), id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_email_pool_source_status ON email_pool(source, status, id DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_accounts_archived ON codex_accounts(archived, id DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_accounts_email ON codex_accounts(email COLLATE NOCASE)")
@@ -353,6 +358,7 @@ def _ensure_sqlite() -> None:
             if not migration_done:
                 conn.execute("INSERT OR REPLACE INTO storage_meta(key, value) VALUES('legacy_import_completed', ?)", (_now(),))
             _reserve_account_id_floor(conn, int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM accounts").fetchone()[0]))
+            _reserve_job_id_floor(conn, int(conn.execute("SELECT COALESCE(MAX(id),0) FROM registration_jobs").fetchone()[0]))
             _migrate_inspection_snapshots(conn)
         _SQLITE_READY = True
         _SQLITE_READY_PATH = active_path
@@ -382,6 +388,10 @@ def _save_collection(collection: str, rows: list[dict]) -> None:
                 floor = max([int(r.get("id") or 0) for r in rows] + [
                     int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM accounts").fetchone()[0])])
                 _reserve_account_id_floor(conn, floor)
+            if table == "registration_jobs":
+                floor = max([int(r.get("id") or 0) for r in rows] + [
+                    int(conn.execute("SELECT COALESCE(MAX(id),0) FROM registration_jobs").fetchone()[0])])
+                _reserve_job_id_floor(conn, floor)
             if table == "email_pool":
                 conn.execute("DELETE FROM email_pool WHERE source=?", (source,))
             else:
@@ -3223,6 +3233,7 @@ def codex_accounts_summary() -> dict:
 def _new_job_row(
     rows: list[dict],
     *,
+    job_id: int | None = None,
     email_source: str,
     job_type: str = "registration",
     parent_job_id: int | None = None,
@@ -3236,7 +3247,7 @@ def _new_job_row(
     log_file = str(_LOG_DIR / f"{job_uuid}.log")
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
     return {
-        "id": _next_id(rows),
+        "id": int(job_id) if job_id is not None else _next_id(rows),
         "job_uuid": job_uuid,
         "job_type": job_type,
         "parent_job_id": parent_job_id,
@@ -3256,31 +3267,79 @@ def _new_job_row(
     }
 
 
-def create_job(email_source: str) -> dict:
-    """创建一个首次执行的 pending 注册任务。"""
+def _reserve_job_id_floor(conn, value: int) -> None:
+    conn.execute("INSERT INTO storage_meta(key,value) VALUES('registration_job_id_high_watermark',?) "
+                 "ON CONFLICT(key) DO UPDATE SET value=MAX(CAST(value AS INTEGER),CAST(excluded.value AS INTEGER))",
+                 (str(value),))
+
+
+def _allocate_job_ids(conn, count: int) -> int:
+    """调用方持有写事务；删除最大/全部任务后也不能让旧 Future 命中新任务。"""
+    existing = int(conn.execute("SELECT COALESCE(MAX(id),0) FROM registration_jobs").fetchone()[0])
+    record = conn.execute("SELECT value FROM storage_meta WHERE key='registration_job_id_high_watermark'").fetchone()
+    floor = max(existing, int(record[0]) if record else 0)
+    _reserve_job_id_floor(conn, floor + count)
+    return floor + 1
+
+
+def _job_values(row: dict) -> tuple:
+    return (int(row['id']), str(row.get('email') or ''), str(row.get('status') or ''),
+            int(bool(row.get('archived'))), str(row.get('created_at') or ''),
+            str(row.get('updated_at') or ''), json.dumps(row, ensure_ascii=False))
+
+
+def _insert_job_rows(conn, rows: list[dict]) -> None:
+    conn.executemany(
+        "INSERT INTO registration_jobs(id,email,status,archived,created_at,updated_at,payload) VALUES(?,?,?,?,?,?,?)",
+        [_job_values(row) for row in rows],
+    )
+
+
+def create_jobs(count: int, email_source: str) -> list[dict]:
+    """一次事务创建整批任务，不读取/重写历史任务 payload。"""
+    count = int(count)
+    if count <= 0:
+        return []
     with _LOCK:
-        rows = _load_jobs()
-        row = _new_job_row(rows, email_source=email_source)
-        rows.append(row)
-        _save_jobs(rows)
-        return dict(row)
+        _ensure_sqlite()
+        with closing(_sqlite_conn()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            first_id = _allocate_job_ids(conn, count)
+            rows = [_new_job_row([], job_id=first_id + index, email_source=email_source)
+                    for index in range(count)]
+            now = datetime.now().isoformat(timespec="microseconds")
+            for row in rows:
+                row['updated_at'] = now
+            _insert_job_rows(conn, rows)
+    return rows
+
+
+def create_job(email_source: str) -> dict:
+    return create_jobs(1, email_source)[0]
+
+
+def _finish_jobs_in_statuses(statuses: tuple[str, ...], status: str, error: str) -> int:
+    """按状态索引批量转换，SQLite 写事务保证不会取消已领取的任务。"""
+    with _LOCK:
+        _ensure_sqlite()
+        now = datetime.now().isoformat(timespec="microseconds")
+        with closing(_sqlite_conn()) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            marks = ','.join('?' for _ in statuses)
+            result = conn.execute(
+                "UPDATE registration_jobs SET status=?,updated_at=?,payload=json_set(payload,"
+                "'$.status',?,'$.error_message',?,'$.completed_at',?,'$.updated_at',?) "
+                f"WHERE status IN ({marks})", (status, now, status, error, now, now, *statuses))
+            return result.rowcount
 
 
 def recover_interrupted_registration_jobs() -> int:
-    """服务重启后将未完成的注册任务标记为 stopped，避免继续占用活动任务名额。"""
-    with _LOCK:
-        rows = _load_jobs()
-        changed = 0
-        now = _now()
-        for row in rows:
-            if row.get("status") in {"pending", "running", "stopping"}:
-                row["status"] = "stopped"
-                row["error"] = "服务重启，注册任务被中断并释放"
-                row["completed_at"] = now
-                changed += 1
-        if changed:
-            _save_jobs(rows)
-        return changed
+    return _finish_jobs_in_statuses(('pending', 'running', 'stopping'), 'stopped',
+                                   '服务重启，注册任务被中断并释放')
+
+
+def cancel_pending_registration_jobs() -> int:
+    return _finish_jobs_in_statuses(('pending',), 'cancelled', '用户手动取消')
 
 
 def create_retry_job(
@@ -3293,45 +3352,48 @@ def create_retry_job(
 ) -> tuple[dict, bool]:
     """原子创建重试子任务；同一任务链已有活跃任务时直接复用。"""
     with _LOCK:
-        rows = _load_jobs()
-        source = next((r for r in rows if int(r.get("id") or 0) == int(source_job_id)), None)
-        if source is None:
-            raise LookupError("任务不存在")
-        if source.get("status") not in ("failed", "stopped", "cancelled"):
-            raise ValueError(f"当前状态不支持重试：{source.get('status')}")
-
-        root_id = int(source.get("root_job_id") or source.get("id"))
-        active_states = {"pending", "running", "stopping"}
-        active = next((
-            r for r in rows
-            if int(r.get("id") or 0) != int(source_job_id)
-            and int(r.get("root_job_id") or 0) == root_id
-            and r.get("status") in active_states
-        ), None)
-        if active is not None:
-            if active.get("job_type", "registration") != job_type:
-                raise ValueError(f"已有其他类型重试任务 #{active.get('id')} 在排队或运行中")
-            return dict(active), False
-
-        attempts = [
-            int(r.get("retry_attempt") or 0)
-            for r in rows
-            if int(r.get("id") or 0) == root_id or int(r.get("root_job_id") or 0) == root_id
-        ]
-        row = _new_job_row(
-            rows,
-            email_source=email_source,
-            job_type=job_type,
-            parent_job_id=int(source_job_id),
-            root_job_id=root_id,
-            retry_attempt=(max(attempts) if attempts else 0) + 1,
-            retry_action=("codex" if job_type == "codex_retry" else "registration"),
-            email=email,
-            account_id=account_id,
-        )
-        rows.append(row)
-        _save_jobs(rows)
-        return dict(row), True
+        _ensure_sqlite()
+        with closing(_sqlite_conn()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            record = conn.execute("SELECT payload FROM registration_jobs WHERE id=?", (int(source_job_id),)).fetchone()
+            if record is None:
+                raise LookupError("任务不存在")
+            source = json.loads(record['payload'])
+            if source.get('status') not in ('failed', 'stopped', 'cancelled'):
+                raise ValueError(f"当前状态不支持重试：{source.get('status')}")
+            root_id = int(source.get('root_job_id') or source['id'])
+            active = conn.execute(
+                "SELECT payload FROM registration_jobs WHERE CAST(json_extract(payload, '$.root_job_id') AS INTEGER)=? "
+                "AND status IN ('pending','running','stopping') AND id!=? ORDER BY id LIMIT 1",
+                (root_id, int(source_job_id)),
+            ).fetchone()
+            if active is not None:
+                row = json.loads(active['payload'])
+                if row.get('job_type', 'registration') != job_type:
+                    raise ValueError(f"已有其他类型重试任务 #{row.get('id')} 在排队或运行中")
+                return row, False
+            successful = conn.execute(
+                "SELECT id FROM registration_jobs WHERE CAST(json_extract(payload, '$.root_job_id') AS INTEGER)=? "
+                "AND status='success' AND id!=? ORDER BY id DESC LIMIT 1", (root_id, int(source_job_id)),
+            ).fetchone()
+            if successful is not None:
+                raise ValueError(f"后续重试任务 #{successful['id']} 已成功")
+            attempt = conn.execute(
+                "SELECT COALESCE(MAX(CAST(json_extract(payload, '$.retry_attempt') AS INTEGER)),0) "
+                "FROM registration_jobs WHERE id=? OR CAST(json_extract(payload, '$.root_job_id') AS INTEGER)=?",
+                (root_id, root_id),
+            ).fetchone()[0]
+            next_id = _allocate_job_ids(conn, 1)
+            row = _new_job_row(
+                [], job_id=next_id, email_source=email_source, job_type=job_type,
+                parent_job_id=int(source_job_id), root_job_id=root_id,
+                retry_attempt=int(attempt) + 1,
+                retry_action='codex' if job_type == 'codex_retry' else 'registration',
+                email=email, account_id=account_id,
+            )
+            row['updated_at'] = datetime.now().isoformat(timespec="microseconds")
+            _insert_job_rows(conn, [row])
+            return row, True
 
 
 def update_job(
@@ -3344,27 +3406,43 @@ def update_job(
     completed_at: str | None = None,
     account_id: int | None = None,
     network_traffic: dict | None = None,
-) -> None:
+    expected_statuses: tuple[str, ...] | None = None,
+) -> bool:
+    """索引定位原子读改写；可选状态 CAS，重复元数据更新不产生写入。"""
     with _LOCK:
-        rows = _load_jobs()
-        row = next((r for r in rows if int(r.get("id") or 0) == int(job_id)), None)
-        if row is None:
-            return
-        if status is not None:
-            row["status"] = status
-        if email is not None:
-            row["email"] = email
-        if error is not None:
-            row["error_message"] = error
-        if started_at is not None:
-            row["started_at"] = started_at
-        if completed_at is not None:
-            row["completed_at"] = completed_at
-        if account_id is not None:
-            row["account_id"] = account_id
-        if network_traffic is not None:
-            row["network_traffic"] = dict(network_traffic)
-        _save_jobs(rows)
+        _ensure_sqlite()
+        with closing(_sqlite_conn()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            record = conn.execute("SELECT payload FROM registration_jobs WHERE id=?", (int(job_id),)).fetchone()
+            if record is None:
+                return False
+            row = json.loads(record['payload'])
+            if expected_statuses is not None and row.get('status') not in expected_statuses:
+                return False
+            before = dict(row)
+            if status is not None:
+                row["status"] = status
+            if email is not None:
+                row["email"] = email
+            if error is not None:
+                row["error_message"] = error
+            if started_at is not None:
+                row["started_at"] = started_at
+            if completed_at is not None:
+                row["completed_at"] = completed_at
+            if account_id is not None:
+                row["account_id"] = account_id
+            if network_traffic is not None:
+                row["network_traffic"] = dict(network_traffic)
+            if row == before:
+                return True
+            row['updated_at'] = datetime.now().isoformat(timespec="microseconds")
+            values = _job_values(row)
+            conn.execute(
+                "UPDATE registration_jobs SET email=?,status=?,archived=?,created_at=?,updated_at=?,payload=? WHERE id=?",
+                (*values[1:], values[0]),
+            )
+            return True
 
 
 def list_jobs(limit: int = 100) -> list[dict]:
@@ -3373,20 +3451,22 @@ def list_jobs(limit: int = 100) -> list[dict]:
 
 
 def list_jobs_page(limit: int = 50, offset: int = 0) -> dict:
-    """直接使用 registration_jobs 的 SQL LIMIT/OFFSET 返回任务页。"""
-    with _LOCK:
-        limit = max(1, int(limit))
-        offset = max(0, int(offset or 0))
-        rows, total, latest = _query_collection_page(
-            "jobs", limit=limit, offset=offset
-        )
-        return {
-            "items": rows,
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "revision": f"{total}:{latest}",
-        }
+    """索引分页；同一读事务内获取当前页、状态计数和 revision。"""
+    _ensure_sqlite()
+    limit, offset = max(1, int(limit)), max(0, int(offset or 0))
+    with closing(_sqlite_conn()) as conn, conn:
+        conn.execute("BEGIN")
+        counts = {}
+        for row in conn.execute("SELECT status, COUNT(*) AS n FROM registration_jobs GROUP BY status"):
+            status = str(row['status'] or 'unknown')
+            counts[status] = counts.get(status, 0) + int(row['n'])
+        total = sum(counts.values())
+        counts['active'] = sum(counts.get(status, 0) for status in ('pending', 'running', 'stopping'))
+        latest = conn.execute("SELECT COALESCE(MAX(updated_at), '') FROM registration_jobs").fetchone()[0]
+        rows = [json.loads(row['payload']) for row in conn.execute(
+            "SELECT payload FROM registration_jobs ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))]
+    return {'items': rows, 'total': total, 'offset': offset, 'limit': limit,
+            'revision': f'{total}:{latest}', 'status_counts': counts}
 
 
 def job_status_counts() -> dict:
@@ -3403,29 +3483,87 @@ def job_status_counts() -> dict:
     return counts
 
 
+def get_jobs_by_ids(job_ids: list[int]) -> list[dict]:
+    """读取指定批次的最新任务快照，保持输入顺序。"""
+    ids = list(dict.fromkeys(int(value) for value in job_ids))
+    if not ids:
+        return []
+    _ensure_sqlite()
+    found = {}
+    with closing(_sqlite_conn()) as conn:
+        for start in range(0, len(ids), 400):
+            chunk = ids[start:start + 400]
+            marks = ','.join('?' for _ in chunk)
+            for record in conn.execute(f"SELECT id,payload FROM registration_jobs WHERE id IN ({marks})", chunk):
+                found[int(record['id'])] = json.loads(record['payload'])
+    return [found[value] for value in ids if value in found]
+
+
 def get_job(job_id: int) -> dict | None:
-    with _LOCK:
-        row = next((r for r in _load_jobs() if int(r.get("id") or 0) == int(job_id)), None)
-        return dict(row) if row else None
+    rows = get_jobs_by_ids([job_id])
+    return rows[0] if rows else None
+
+
+def get_job_retry_context(jobs: list[dict]) -> dict[int, dict]:
+    """批量获取当前页终态任务的后续成功重试和账号摘要，消除 N+1 全表读取。"""
+    jobs = [job for job in jobs if job.get('status') in ('failed', 'stopped', 'cancelled')]
+    if not jobs:
+        return {}
+    roots = list({int(job.get('root_job_id') or job['id']) for job in jobs})
+    account_ids = set()
+    for job in jobs:
+        try:
+            if job.get('account_id') is not None:
+                account_ids.add(int(job['account_id']))
+        except (TypeError, ValueError):
+            pass
+    emails = list({str(job.get('email') or '').strip().lower() for job in jobs} - {''})
+    successes, accounts, by_email = {}, {}, {}
+    _ensure_sqlite()
+    with closing(_sqlite_conn()) as conn, conn:
+        conn.execute('BEGIN')
+        for start in range(0, len(roots), 400):
+            chunk = roots[start:start + 400]
+            marks = ','.join('?' for _ in chunk)
+            for row in conn.execute(
+                f"SELECT id,CAST(json_extract(payload, '$.root_job_id') AS INTEGER) AS root_id FROM registration_jobs "
+                f"WHERE CAST(json_extract(payload, '$.root_job_id') AS INTEGER) IN ({marks}) AND status='success' ORDER BY id DESC", chunk):
+                successes.setdefault(int(row['root_id']), []).append({'id': int(row['id'])})
+        for column, values in [('id', list(account_ids)), ('account_email_lower(email)', emails)]:
+            for start in range(0, len(values), 400):
+                chunk = values[start:start + 400]
+                marks = ','.join('?' for _ in chunk)
+                for row in conn.execute(
+                    f"SELECT id,email,json_extract(payload, '$.codex_status') AS codex_status FROM accounts WHERE {column} IN ({marks}) ORDER BY id", chunk):
+                    account = dict(row)
+                    accounts[int(row['id'])] = account
+                    email_key = str(row['email'] or '').lower()
+                    previous = by_email.get(email_key)
+                    if previous is None or int(row['id']) < int(previous['id']):
+                        by_email[email_key] = account
+    result = {}
+    for job in jobs:
+        root = int(job.get('root_job_id') or job['id'])
+        success = next((row for row in successes.get(root, []) if row['id'] != int(job['id'])), None)
+        try:
+            account = accounts.get(int(job['account_id'])) if job.get('account_id') is not None else None
+        except (TypeError, ValueError):
+            account = None
+        account = account or by_email.get(str(job.get('email') or '').strip().lower())
+        result[int(job['id'])] = {'successful_retry': success, 'account': account}
+    return result
 
 
 def get_successful_retry_for_job(job_id: int) -> dict | None:
     """返回同一任务链中已成功的其他重试任务，用于保留原任务历史状态并阻止重复重试。"""
-    with _LOCK:
-        rows = _load_jobs()
-        source = next((r for r in rows if int(r.get("id") or 0) == int(job_id)), None)
-        if source is None:
-            return None
-        root_id = int(source.get("root_job_id") or source.get("id") or 0)
-        matches = [
-            r for r in rows
-            if int(r.get("id") or 0) != int(job_id)
-            and int(r.get("root_job_id") or 0) == root_id
-            and r.get("status") == "success"
-        ]
-        if not matches:
-            return None
-        return dict(max(matches, key=lambda r: int(r.get("id") or 0)))
+    job = get_job(job_id)
+    if job is None:
+        return None
+    # 调用方只对失败终态任务检查成功重试；兼容其他状态的直接调用。
+    context_job = dict(job, status='failed')
+    context = get_job_retry_context([context_job]).get(int(job_id), {})
+    match = context.get('successful_retry')
+    return get_job(match['id']) if match else None
 
 
 def delete_job(job_id: int, *, delete_log: bool = True, allow_running: bool = False) -> bool:
@@ -3434,14 +3572,17 @@ def delete_job(job_id: int, *, delete_log: bool = True, allow_running: bool = Fa
     默认不删除 running 任务，避免后台线程仍在执行但前端记录消失。
     """
     with _LOCK:
-        rows = _load_jobs()
-        idx = next((i for i, r in enumerate(rows) if int(r.get("id") or 0) == int(job_id)), None)
-        if idx is None:
-            return False
-        if not allow_running and rows[idx].get("status") in ("running", "stopping"):
-            return False
-        row = rows.pop(idx)
-        _save_jobs(rows)
+        _ensure_sqlite()
+        with closing(_sqlite_conn()) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            record = conn.execute('SELECT payload FROM registration_jobs WHERE id=?', (int(job_id),)).fetchone()
+            if record is None:
+                return False
+            row = json.loads(record['payload'])
+            if not allow_running and row.get('status') in ('running', 'stopping'):
+                return False
+            _reserve_job_id_floor(conn, int(job_id))
+            conn.execute('DELETE FROM registration_jobs WHERE id=?', (int(job_id),))
 
     if delete_log:
         log_file = row.get("log_file")

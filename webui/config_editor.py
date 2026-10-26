@@ -91,6 +91,22 @@ EDITABLE_FIELDS = [
         "label": "注册驱动", "help": "默认推荐 roxy；protocol=纯协议，容易封号不建议；roxy=RoxyBrowser；cloak=CloakBrowser；browser_use=Browser Use Cloud+Playwright；skyvern=Skyvern Browser Sessions+Playwright",
     },
     {
+        "key": "PROTOCOL_HTTP_CLIENT", "file": "browser.py", "type": "str", "group": "功能开关",
+        "label": "纯协议 HTTP 客户端", "help": "curl_cffi / wreq；作用于 BrowserSession（含纯协议注册和后台 2FA），不改变 Roxy 注册。保存后新会话生效；wreq 需要 Python >=3.11。",
+        "choices": [
+            {"value": "curl_cffi", "label": "curl_cffi（默认）"},
+            {"value": "wreq", "label": "wreq"},
+        ],
+    },
+    {
+        "key": "CURL_CFFI_IMPERSONATE", "file": "browser.py", "type": "str", "group": "功能开关",
+        "label": "curl_cffi 浏览器协议", "help": "仅在选择 curl_cffi 时使用；列出当前安装版本支持的桌面 Chrome / Edge / Firefox / Safari 指纹，新会话生效。",
+    },
+    {
+        "key": "WREQ_EMULATION", "file": "browser.py", "type": "str", "group": "功能开关",
+        "label": "wreq 浏览器协议", "help": "仅在选择 wreq 时使用；列出当前安装版本支持的桌面浏览器指纹。需要安装 wreq；仅同步基础 UA/Client Hints，不等价于完整浏览器环境。",
+    },
+    {
         "key": "AUTO_PLAN_CHECK_AFTER_REGISTER", "file": "register.py", "type": "bool", "group": "注册方式",
         "label": "注册后自动查套餐", "help": "注册成功后自动入队查询套餐/Plus 资格；关闭后仅保存账号，不自动查套餐",
     },
@@ -1080,6 +1096,11 @@ def get_config() -> list[dict]:
         if field["type"] in ("str", "list_str_multiline"):
             value = _normalize_config_value(value, field["type"])
         item = dict(field)
+        from core.protocol_profiles import PROFILE_FIELDS, profile_choices
+        if key in PROFILE_FIELDS:
+            item["choices"] = profile_choices(key)
+            if not item["choices"]:
+                item["choices"] = [{"value": str(value), "label": "后端未安装，请先安装依赖"}]
         item["storage"] = "env"
         item["value"] = value
         out.append(item)
@@ -1233,12 +1254,26 @@ def update_config(updates: dict) -> dict:
         for item in get_config()
     }
 
+    from core.protocol_profiles import PROFILE_FIELDS, supported_profiles
+    backend = str(updates.get("PROTOCOL_HTTP_CLIENT", current_values.get("PROTOCOL_HTTP_CLIENT", "curl_cffi")))
+    active_profile_key = "WREQ_EMULATION" if backend == "wreq" else "CURL_CFFI_IMPERSONATE"
+    if "PROTOCOL_HTTP_CLIENT" in updates or active_profile_key in updates:
+        selected_profile = str(updates.get(active_profile_key, current_values.get(active_profile_key, "chrome146")))
+        if selected_profile not in supported_profiles(backend):
+            raise ValueError(f"{backend} 未安装或不支持浏览器协议 {selected_profile}")
+
     for key, value in updates.items():
         field = _FIELD_BY_KEY.get(key)
         if field is None:
             ignored.append(key)
             continue
-        choices = field.get("choices") or []
+        from core.protocol_profiles import PROFILE_FIELDS, profile_choices
+        choices = profile_choices(key) if key in PROFILE_FIELDS else field.get("choices") or []
+        if key in PROFILE_FIELDS and not choices:
+            # 老 UI 保存整组字段：未安装且未启用的后端默认值不能阻断正常保存。
+            if key != active_profile_key and str(value) == str(current_values.get(key)):
+                continue
+            raise ValueError(f"{PROFILE_FIELDS[key]} 未安装，请先安装 requirements.txt")
         if choices:
             allowed = {str(item.get("value")) for item in choices}
             if str(value) not in allowed:
