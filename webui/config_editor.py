@@ -403,7 +403,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "EMAIL_SOURCE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
-        "label": "邮箱来源", "help": "注册用哪个邮箱池收验证码；也可手填多个，逗号分隔按顺序兜底",
+        "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,imap,cloudflare_domain,cloudflare,gptmail,mailnest,mailcx,cloudmail,remail,xigua,mailcode",
         "options": [
             {"value": "remail", "label": "Remail 开放 API（remail.aishop6.com，自动下单并收码）"},
             {"value": "mailcx", "label": "Mail.cx 临时邮箱（免费，域名易被 OpenAI 拉黑）"},
