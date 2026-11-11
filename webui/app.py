@@ -81,7 +81,7 @@ def _vak_api_key() -> str:
 def _vak_fetch(path: str, *, params: dict | None = None, timeout: int = 20) -> tuple[int, object, str]:
     from urllib.parse import urlencode
     url = _vak_api_base().rstrip("/") + "/" + path.lstrip("/")
-    q = {"apiKey": _vak_api_key()}
+    q = {}
     if params:
         for k, v in params.items():
             if v is None or str(v).strip() == "":
@@ -90,7 +90,9 @@ def _vak_fetch(path: str, *, params: dict | None = None, timeout: int = 20) -> t
     if q:
         url += "?" + urlencode(q)
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    req = Request(url, headers=headers)
+    separator = "&" if q else "?"
+    auth_query = urlencode({"apiKey": _vak_api_key()})
+    req = Request(url + separator + auth_query, headers=headers)
     try:
         with urlopen(req, timeout=timeout) as r:
             raw = r.read().decode("utf-8", "ignore")
