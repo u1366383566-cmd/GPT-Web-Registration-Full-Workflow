@@ -12,7 +12,7 @@ ChatGPT / OpenAI 账号自动注册与 Codex OAuth 授权工具。当前项目�
 
 ### 协议 HTTP 客户端
 
-WebUI → 配置 → 功能开关 → **纯协议 HTTP 客户端**，选择 `curl_cffi`（默认）或 `wreq`。也可在 `.env` 设置：
+WebUI → 配置 → 协议配置 → **纯协议 HTTP 客户端**，选择 `curl_cffi`（默认）或 `wreq`。也可在 `.env` 设置：
 
 ```dotenv
 PROTOCOL_HTTP_CLIENT="wreq"
@@ -559,6 +559,19 @@ REGISTRATION_DRIVER = "protocol"
 优先使用 `config/register.py` 的 `REGISTER_PASSWORD`，未配置时随机生成，
 并保存到账号的 `extra_json.registration_password`。
 
+如果密码已提交、但验证码或资料步骤失败，可在账号列表选择状态
+**注册未完成（已设密码）**，点击该账号的 **继续注册**。后台会使用原邮箱和
+已保存密码，以协议流程继续邮箱验证、资料提交及 Session/Token 获取；不会
+领取新邮箱或生成新密码。落到邮箱验证页时保留当前验证流程，不强制切换登录；
+明确进入注册密码页时复用原密码提交注册，仅在登录密码状态验证密码。
+点击后打开任务日志，也可在任务列表停止或重试。
+同一邮箱已有排队/运行任务时会复用任务；此类账号的失败任务重试也会走继续注册，
+而不是直接补跑 Codex。资料使用项目现有的随机姓名、生日生成规则。
+
+批量处理时，筛选上述状态并勾选账号，设置 **续注册线程**（1–16，默认 1），
+点击 **批量继续注册**。单次最多 500 个账号；已完成注册、已废号或不存在的账号
+自动跳过，已有任务不会重复创建，单个账号提交失败不影响其余账号。
+
 #### 使用 Browser Use Cloud 注册
 
 ```python
@@ -638,7 +651,7 @@ CODEX_OAUTH_DRIVER = "browser_use"  # 可选 protocol / roxy / cloak / browser_u
 接码配置在 `config/codex.py`：
 
 ```python
-SMS_PROVIDER = "l"        # 可选 grizzly / l / h
+SMS_PROVIDER = "l"        # 可选 grizzly / smsbower / tiger / l / h
 SMS_API_KEY = "你的 GrizzlySMS key"  # 仅 GrizzlySMS 需要
 SMS_SERVICE = "openai"
 SMS_COUNTRY = "国家代码"
@@ -652,6 +665,21 @@ SMS_POLL_INTERVAL = 5
 H_API_BASE = "http://localhost:8788"
 H_ADMIN_AUTH_CODE = "你的H后台授权码"
 ```
+
+Tiger SMS 在 WebUI「接码平台 → Tiger SMS」填写密钥，并将通用接码通道设为 `tiger`；也可在 `.env` 配置：
+
+```dotenv
+SMS_PROVIDER="tiger"
+TIGER_SMS_API_BASE="https://api.tiger-sms.com/stubs/handler_api.php"
+TIGER_SMS_API_KEY="你的 Tiger SMS API Key"
+SMS_SERVICE="dr"
+SMS_COUNTRY="国家数字代码"
+SMS_MAX_PRICE=""
+```
+
+保存 Tiger SMS 密钥后，进入 WebUI「接码平台 → Tiger SMS」会自动加载项目列表；选择项目后动态加载该项目有库存的国家、美元单价及库存，支持「价格：低 → 高 / 高 → 低」排序。项目可按名称或代码输入过滤，国家可按名称、代码、单价或库存输入过滤（空格分隔多个关键词）；过滤不改变当前选择，也不额外请求接口。选择国家后可查看该国家各价格档位及对应库存；选择档位会将档位价格填入购买最高单价（仅限制上限，不锁定档位或供应商）。国家按最低有库存档位价格排序。选择后点击页面“保存”生效；可通过“刷新项目和国家”更新报价。查询目录不会购买号码，展示价格仅供参考，可在该面板设置“购买最高单价（USD）”（复用 `SMS_MAX_PRICE`），保存后取号严格携带 `maxPrice` 上限，不自动加价；留空不限。非空值必须是大于 0 的有限数字，否则取号前直接报错。
+
+国家代码以 [Tiger SMS 国家表/API](https://tiger-sms.com/cn/api) 为准，不要直接沿用其他平台。`openai`/`chatgpt` 服务名自动转换为 `dr`。复用通用等待、轮询和重试配置；同时适用于注册手机验证和 Codex 授权。取号、查码、状态设置分别使用 `getNumberV2`、`getStatusV2`、`setStatusV2`；跨国家价格查询使用新版 `getOffers`（`getPricesV3` 必须指定单个国家），项目和国家名称继续使用没有新版替代的 `getServicesList` / `getCountries`。不自动回退 V1 交易接口。取消在后台执行，平台拒绝过早取消时根据 `info.minActivationTime` 等待后重试，已收到短信的激活不能取消，失败会记录日志。退出进程会终止尚未执行完的后台取消任务。
 
 CPA 授权地址来源：
 

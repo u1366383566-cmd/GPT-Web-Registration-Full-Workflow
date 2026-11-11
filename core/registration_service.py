@@ -66,6 +66,20 @@ def _deactivate_job(job_id: int) -> None:
         pass
 
 
+def _finish_active_job(job_id: int, *, status: str, **fields) -> str | None:
+    """停止与终态提交竞争时保留停止；CAS不覆盖已结束/已取消的任务。"""
+    with _STOP_LOCK:
+        event = _STOP_EVENTS.get(int(job_id))
+        if status == 'stopped' or (event is not None and event.is_set()):
+            fields['error'] = '用户手动停止'
+            return 'stopped' if db.update_job(job_id, status='stopped', expected_statuses=('running', 'stopping'), **fields) else None
+        # 跨进程停止无法共享Event，先只允许running转终态；若stopping先提交则改落stopped。
+        if db.update_job(job_id, status=status, expected_statuses=('running',), **fields):
+            return status
+        fields['error'] = '用户手动停止'
+        return 'stopped' if db.update_job(job_id, status='stopped', expected_statuses=('stopping',), **fields) else None
+
+
 def is_stop_requested(job_id: int | None = None) -> bool:
     if job_id is None:
         job_id = getattr(_THREAD_CTX, "job_id", None)
@@ -289,11 +303,24 @@ def _run_one_job(job_id: int, log_file: str) -> None:
         return
 
     email: str | None = None
+    resume = False
     try:
         with _JobLogContext(log_file):
             from main import run_registration
             log_logger.info(f"[Job {job_id}] 开始注册任务")
-            email, name, birthday = _prepare_registration_args()
+            job = db.get_job(job_id) or {}
+            resume = job.get("job_type") == "registration_resume"
+            if resume:
+                account = db.get_account(int(job["account_id"]))
+                if not account or account.get("email") != job.get("email"):
+                    raise RuntimeError("原账号已删除或邮箱已变更，取消继续注册")
+                if not db._matches_codex_status_filter(account, "password_registered"):
+                    raise RuntimeError("账号注册阶段已变化，请刷新列表")
+                from core.profile_utils import generate_random_birthday
+                email, name, birthday = account["email"], _random_display_name(), generate_random_birthday()
+                log_logger.info("[继续注册] 使用原邮箱及已保存凭证：%s", email)
+            else:
+                email, name, birthday = _prepare_registration_args()
             db.update_job(job_id, email=email)
             check_stop_requested()
             def _on_email_acquired(acquired_email: str) -> None:
@@ -308,12 +335,13 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 name=name,
                 birthday=birthday,
                 on_email_acquired=_on_email_acquired,
+                **({"resume_registration": True} if resume else {}),
             )
             if is_stop_requested(job_id):
                 _release_unconsumed_job_email(email, "用户手动停止")
-                db.update_job(
+                _finish_active_job(
                     job_id,
-                    status="stopped", expected_statuses=("running", "stopping"),
+                    status="stopped",
                     network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
                     error="用户手动停止",
                     completed_at=datetime.now().isoformat(timespec="seconds"),
@@ -321,22 +349,25 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                 log_logger.warning(f"[Job {job_id}] 已按用户请求停止")
                 return
             if isinstance(result, dict) and result.get("success"):
-                db.update_job(
+                finished = _finish_active_job(
                     job_id,
-                    status="success", expected_statuses=("running", "stopping"),
+                    status="success",
                     email=result.get("email"),
                     account_id=result.get("account_id"),
                     network_traffic=result.get("network_traffic"),
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
-                log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
+                if finished == 'success':
+                    log_logger.info(f"[Job {job_id}] 成功: {result.get('email')}")
+                elif finished == 'stopped':
+                    log_logger.warning(f"[Job {job_id}] 收尾前收到停止信号，凭证保留，任务已停止")
             else:
                 # 注意：失败也可能伴随 account_id（如 Codex 失败但账号已注册成功）
                 err = (result or {}).get("error") if isinstance(result, dict) else "unknown"
                 result_email = (result or {}).get("email") if isinstance(result, dict) else None
-                db.update_job(
+                _finish_active_job(
                     job_id,
-                    status="failed", expected_statuses=("running", "stopping"),
+                    status="failed",
                     email=result_email,
                     account_id=(result or {}).get("account_id") if isinstance(result, dict) else None,
                     network_traffic=(result or {}).get("network_traffic") if isinstance(result, dict) else None,
@@ -344,7 +375,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     completed_at=datetime.now().isoformat(timespec="seconds"),
                 )
                 email_to_handle = str(result_email or email or "").strip()
-                if _should_disable_failed_registration_email(err):
+                if not resume and _should_disable_failed_registration_email(err):
                     _disable_job_email(email_to_handle, str(err))
                 else:
                     _release_unconsumed_job_email(email_to_handle, str(err))
@@ -352,31 +383,31 @@ def _run_one_job(job_id: int, log_file: str) -> None:
     except StopRequested as exc:
         _release_unconsumed_job_email(email, str(exc))
         log_logger.warning(f"[Job {job_id}] 已停止: {exc}")
-        db.update_job(
+        _finish_active_job(
             job_id,
-            status="stopped", expected_statuses=("running", "stopping"),
+            status="stopped",
             error="用户手动停止",
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
     except Exception as exc:
         err_text = f"{type(exc).__name__}: {exc}"
-        if _should_disable_failed_registration_email(err_text):
+        if not resume and _should_disable_failed_registration_email(err_text):
             _disable_job_email(email, err_text)
         else:
             _release_unconsumed_job_email(email, err_text)
         if is_stop_requested(job_id):
             log_logger.warning(f"[Job {job_id}] 停止中捕获异常，按停止处理: {type(exc).__name__}: {exc}")
-            db.update_job(
+            _finish_active_job(
                 job_id,
-                status="stopped", expected_statuses=("running", "stopping"),
+                status="stopped",
                 error="用户手动停止",
                 completed_at=datetime.now().isoformat(timespec="seconds"),
             )
             return
         log_logger.exception(f"[Job {job_id}] 异常")
-        db.update_job(
+        _finish_active_job(
             job_id,
-            status="failed", expected_statuses=("running", "stopping"),
+            status="failed",
             error=f"{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
@@ -401,28 +432,32 @@ def _run_codex_retry_job(job_id: int, log_file: str, email: str, account_id: int
         )
         now_iso = datetime.now().isoformat(timespec="seconds")
         if is_stop_requested(job_id) or result.get("status") == "stopped":
-            db.update_job(job_id, status="stopped", expected_statuses=("running", "stopping"), email=email, account_id=account_id, error=str(result.get("message") or "用户手动停止")[:500], completed_at=now_iso)
+            _finish_active_job(job_id, status="stopped", email=email, account_id=account_id, error=str(result.get("message") or "用户手动停止")[:500], completed_at=now_iso)
         elif result.get("ok"):
-            db.update_job(
+            _finish_active_job(
                 job_id,
-                status="success", expected_statuses=("running", "stopping"),
+                status="success",
                 email=email,
                 account_id=account_id,
                 completed_at=now_iso,
             )
         else:
-            db.update_job(
+            _finish_active_job(
                 job_id,
-                status="failed", expected_statuses=("running", "stopping"),
+                status="failed",
                 email=email,
                 account_id=account_id,
                 error=str(result.get("message") or "Codex 补跑失败")[:500],
                 completed_at=now_iso,
             )
+    except StopRequested:
+        _finish_active_job(job_id, status="stopped",
+                           completed_at=datetime.now().isoformat(timespec="seconds"))
+        codex_retry_service.release(email)
     except Exception as exc:
-        db.update_job(
+        _finish_active_job(
             job_id,
-            status="failed", expected_statuses=("running", "stopping"),
+            status="failed",
             error=f"{type(exc).__name__}: {exc}"[:500],
             completed_at=datetime.now().isoformat(timespec="seconds"),
         )
@@ -471,6 +506,72 @@ def submit_registration(count: int = 1, email_source: str | None = None, workers
     return jobs
 
 
+def submit_registration_resume(account_id: int, workers: int | None = None,
+                               source_job_id: int | None = None) -> dict:
+    """续注册走正常任务队列/日志/停止控制，数据库按邮箱去重。"""
+    try:
+        job, created = db.create_registration_resume_job(account_id, source_job_id)
+    except LookupError as exc:
+        return {"ok": False, "error": str(exc), "status": 404}
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "status": 409}
+    if created:
+        try:
+            with _executor_lock:
+                get_executor(max_workers=workers).submit(_run_one_job, job['id'], job['log_file'])
+        except Exception as exc:
+            db.update_job(job['id'], status='failed', expected_statuses=('pending',),
+                          error=f"队列提交失败：{type(exc).__name__}: {exc}"[:500],
+                          completed_at=datetime.now().isoformat(timespec='seconds'))
+            return {"ok": False, "error": "继续注册任务提交失败", "status": 500}
+    return {"ok": True, "created": created, "reused": not created,
+            "retry_action": "registration_resume", "job": job,
+            "message": f"{'已创建继续注册任务' if created else '已有进行中的任务'} #{job['id']}，可到任务列表查看日志"}
+
+
+def submit_registration_resume_bulk(account_ids, workers=1) -> dict:
+    """逐账号续注册，单项失败不影响其他账号；复用单项入口的原子去重。"""
+    if not isinstance(account_ids, list) or not account_ids or len(account_ids) > 500:
+        return {"ok": False, "status": 400, "error": "account_ids 必须是非空数组，单次最多 500 个账号"}
+    try:
+        if isinstance(workers, bool) or str(int(workers)) != str(workers).strip() or not 1 <= int(workers) <= 16:
+            raise ValueError
+        workers = int(workers)
+    except (TypeError, ValueError, OverflowError):
+        return {"ok": False, "status": 400, "error": "workers 必须是 1-16 的整数"}
+    created, reused, skipped, failed = [], [], [], []
+    seen = set()
+    for raw in account_ids:
+        try:
+            if isinstance(raw, bool) or str(int(raw)) != str(raw).strip() or int(raw) <= 0:
+                raise ValueError
+            account_id = int(raw)
+        except (TypeError, ValueError, OverflowError):
+            skipped.append({"id": raw, "reason": "ID 非法"})
+            continue
+        if account_id in seen:
+            continue
+        seen.add(account_id)
+        try:
+            result = submit_registration_resume(account_id, workers=workers)
+        except Exception:
+            logger.exception("[继续注册] 批量提交账号 #%s 失败", account_id)
+            failed.append({"id": account_id, "reason": "任务提交异常"})
+            continue
+        if result.get("ok"):
+            item = {"id": account_id, "job_id": result['job']['id'], "email": result['job'].get('email')}
+            (created if result.get('created') else reused).append(item)
+        else:
+            target = failed if result.get('status', 500) >= 500 else skipped
+            target.append({"id": account_id, "reason": result.get('error') or '提交失败'})
+    return {"ok": True, "workers": workers,
+            "created": created, "created_count": len(created),
+            "reused": reused, "reused_count": len(reused),
+            "skipped": skipped, "skipped_count": len(skipped),
+            "failed": failed, "failed_count": len(failed),
+            "message": f"继续注册：新建 {len(created)} 个，已有任务 {len(reused)} 个，跳过 {len(skipped)} 个，失败 {len(failed)} 个"}
+
+
 def _account_for_job(job: dict) -> dict | None:
     account_id = job.get("account_id")
     if account_id is not None:
@@ -505,6 +606,12 @@ def get_retry_info(job: dict, *, context: dict | None = None) -> dict:
         return info
 
     account = context.get('account') if context is not None else _account_for_job(job)
+    if account and db._matches_codex_status_filter(account, "password_registered"):
+        if account.get("live_check_status") == "deactivated":
+            info["retry_reason"] = "账号已废号，不能继续注册"
+        else:
+            info.update(retryable=True, retry_action="registration_resume", retry_label="继续注册")
+        return info
     if account and job.get("account_id") is not None and status in ("failed", "stopped"):
         info["display_status"] = "success" if (account.get("codex_status") or "") == "success" else "partial_success"
 
@@ -538,7 +645,7 @@ def enrich_jobs_retry_info(jobs: list[dict]) -> None:
 
 
 def retry_job(job_id: int, workers: int | None = None) -> dict:
-    """智能重试终态任务：未生成账号则重新注册，已有账号则仅补跑 Codex。"""
+    """智能重试：半成品用原邮箱续注册，完整账号补跑 Codex，其余重新注册。"""
     source = db.get_job(job_id)
     if source is None:
         return {"ok": False, "error": "任务不存在", "status": 404}
@@ -550,6 +657,8 @@ def retry_job(job_id: int, workers: int | None = None) -> dict:
 
     action = str(retry_info["retry_action"])
     account = _account_for_job(source)
+    if action == "registration_resume":
+        return submit_registration_resume(int(account["id"]), workers=workers, source_job_id=job_id)
     email = str((account or {}).get("email") or source.get("email") or "").strip()
     account_id = int(account["id"]) if account and account.get("id") is not None else None
     reserved_codex = False

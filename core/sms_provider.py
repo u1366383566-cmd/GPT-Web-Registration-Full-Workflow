@@ -10,6 +10,7 @@
 当前支持：
     - GrizzlySMS：GET 文本接口，文档 https://api.grizzlysms.com
     - SMSBower：GET handler_api 兼容接口，文档 https://smsbower.app/cn/api?page=client
+    - Tiger SMS：GET handler_api 接口，文档 https://tiger-sms.com/cn/api
     - L：本地 JSON 管理接口，文档 L_API.md
     - H：本地 JSON 管理接口，文档 H_API.md
 
@@ -19,8 +20,11 @@
 """
 import json
 import logging
+import math
 import threading
 import time
+from decimal import Decimal, InvalidOperation
+from typing import Callable
 from urllib.parse import urljoin
 
 from curl_cffi.requests import Session as CurlSession
@@ -127,6 +131,117 @@ def _request_smsbower(http: CurlSession, params: dict) -> str:
     if text.startswith("The service is prohibited"):
         raise SmsProviderError(f"SMSBower 该服务被禁售：{text}")
     return text
+
+
+class _TigerApiError(SmsProviderError):
+    """保留新版错误代码与 info，供取消流程读取平台最短激活时长。"""
+    def __init__(self, code: str, info: dict | None = None):
+        self.code = code
+        self.info = info if isinstance(info, dict) else {}
+        super().__init__(f"Tiger SMS 请求失败：{code}")
+
+
+def _request_tiger(http: CurlSession, params: dict, *, base: str | None = None,
+                   api_key: str | None = None) -> dict | list:
+    """统一解析新版 JSON 成功/错误信封；取号不重试、不回退 V1，避免重复购买。"""
+    base = str(base if base is not None else _cfg.TIGER_SMS_API_BASE).strip()
+    api_key = str(api_key if api_key is not None else _cfg.TIGER_SMS_API_KEY).strip()
+    if not api_key:
+        raise SmsProviderError("Tiger SMS API Key 不能为空")
+    if not base:
+        raise SmsProviderError("TIGER_SMS_API_BASE 不能为空")
+    resp = http.get(base, params={**params, "api_key": api_key})
+    text = (resp.text or "").strip()
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        data = None
+    code = str(data.get("title") or data.get("error") or "") if isinstance(data, dict) else ""
+    # 网关/鉴权仍可能返回纯文本错误，但不接受旧版文本成功响应。
+    if not code and text in ("NO_BALANCE", "NO_NUMBERS", "NO_PROVIDERS", "BAD_KEY", "BAD_ACTION"):
+        code = text
+    if code == "NO_BALANCE":
+        raise SmsNoBalanceError("Tiger SMS 余额不足（NO_BALANCE）")
+    if code in ("NO_NUMBERS", "NO_PROVIDERS"):
+        raise SmsNoNumbersError(f"Tiger SMS 暂无可用号码（{code}）")
+    if code:
+        raise _TigerApiError(code, data.get("info") if isinstance(data, dict) else None)
+    if resp.status_code != 200:
+        raise SmsProviderError(f"Tiger SMS HTTP {resp.status_code}")
+    if not isinstance(data, (dict, list)):
+        raise SmsProviderError(f"Tiger SMS {params.get('action')} 响应不是有效 JSON 对象/数组")
+    return data
+
+
+def get_tiger_catalog(service: str | None = None, http: CurlSession | None = None) -> dict:
+    """只读目录：无 service 时取项目，有 service 时合并国家名称与该项目的价格/库存。"""
+    own_http = http is None
+    http = http or _http()
+    try:
+        def query(action: str, **params):
+            return _request_tiger(http, {"action": action, **params})
+
+        if service is None:
+            data = query("getServicesList", lang="cn")
+            if not isinstance(data, dict) or not isinstance(data.get("services"), list):
+                raise SmsProviderError("Tiger SMS 项目目录格式异常")
+            services = [
+                {"code": str(item["code"]), "name": str(item.get("name") or item["code"])}
+                for item in data["services"] if isinstance(item, dict) and item.get("code")
+            ]
+            return {"services": services}
+
+        service = str(service).strip()
+        if service.lower() in ("openai", "chatgpt"):
+            service = "dr"
+        if not service or len(service) > 100:
+            raise SmsProviderError("Tiger SMS 项目代码不能为空或超过 100 字符")
+        raw_countries = query("getCountries")
+        if isinstance(raw_countries, dict):
+            raw_countries = list(raw_countries.values())
+        if not isinstance(raw_countries, list):
+            raise SmsProviderError("Tiger SMS 国家目录格式异常")
+        names = {
+            str(item["id"]): str(item.get("chn") or item.get("eng") or item["id"])
+            for item in raw_countries if isinstance(item, dict) and item.get("id") is not None
+        }
+        # getPricesV3 必须指定 country；getOffers 是官方新版跨国家批量报价接口。
+        offers = query("getOffers", services=service)
+        if not isinstance(offers, dict) or not isinstance(offers.get("data"), dict):
+            raise SmsProviderError("Tiger SMS 报价目录格式异常")
+        prices = offers["data"].get(service, {})
+        if not isinstance(prices, dict):
+            raise SmsProviderError("Tiger SMS 项目报价格式异常")
+        countries = []
+        for country_id, offer in prices.items():
+            if not isinstance(offer, dict):
+                continue
+            try:
+                price = float(offer["prices"]["default"])
+                count = int(offer["counts"]["total"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if not math.isfinite(price) or price < 0 or count <= 0:
+                continue
+            buckets = []
+            price_map = offer.get("map")
+            if isinstance(price_map, dict):
+                for raw_price, raw_count in price_map.items():
+                    try:
+                        bucket_price, bucket_count = Decimal(str(raw_price)), int(raw_count)
+                    except (InvalidOperation, TypeError, ValueError, OverflowError):
+                        continue
+                    if not bucket_price.is_finite() or bucket_price <= 0 or bucket_count <= 0:
+                        continue
+                    buckets.append({"price": str(raw_price), "count": bucket_count})
+            buckets.sort(key=lambda bucket: Decimal(bucket["price"]))
+            countries.append({"id": str(country_id), "name": names.get(str(country_id), str(country_id)),
+                              "price": price, "count": count, "buckets": buckets})
+        countries.sort(key=lambda item: (Decimal(item["buckets"][0]["price"]) if item["buckets"] else Decimal(str(item["price"])), item["id"]))
+        return {"service": service, "countries": countries, "currency": "USD"}
+    finally:
+        if own_http:
+            http.close()
 
 
 def _smsbower_number_params(service: str | None, country: str | None) -> dict:
@@ -401,9 +516,36 @@ def acquire_number(
     Raises:
         SmsNoNumbersError / SmsNoBalanceError / SmsProviderError
     """
+    from core.task_control import check_stop_requested
+    check_stop_requested()
     own_http = http is None
     http = http or _http()
     try:
+        if _provider() == "tiger":
+            service_code = str(service or _cfg.SMS_SERVICE).strip()
+            if service_code.lower() in ("openai", "chatgpt"):
+                service_code = "dr"
+            params = {"action": "getNumberV2", "service": service_code,
+                      "country": str(country or _cfg.SMS_COUNTRY).strip()}
+            max_price = str(_cfg.SMS_MAX_PRICE if _cfg.SMS_MAX_PRICE is not None else "").strip()
+            if max_price:
+                try:
+                    price = Decimal(max_price)
+                except InvalidOperation:
+                    raise SmsProviderError("Tiger SMS 购买最高单价必须是大于 0 的有效数字（USD）") from None
+                if not price.is_finite() or price <= 0:
+                    raise SmsProviderError("Tiger SMS 购买最高单价必须是大于 0 的有效数字（USD）")
+                params["maxPrice"] = max_price
+            data = _request_tiger(http, params)
+            if not isinstance(data, dict):
+                raise SmsProviderError("Tiger SMS getNumberV2 响应格式异常")
+            activation_id = str(data.get("activationId") or "").strip()
+            phone = str(data.get("phoneNumber") or "").strip().removeprefix("+")
+            if not activation_id or not phone.isascii() or not phone.isdigit():
+                raise SmsProviderError("Tiger SMS getNumberV2 响应缺少有效 ID/号码")
+            _ACQUIRED_AT[activation_id] = time.time()
+            return activation_id, phone
+
         if _provider() == "smsbower":
             params, text = _request_smsbower_number(http, _smsbower_number_params(service, country))
             if params["action"] == "getNumberV2":
@@ -519,11 +661,15 @@ def acquire_number(
 def wait_for_sms_code(
     activation_id: str,
     http: CurlSession | None = None,
-    max_wait: int | None = None,
+    max_wait: float | None = None,
     poll_interval: int | None = None,
+    *,
+    on_poll: Callable[[float], None] | None = None,
+    exclude_codes: set[str] | None = None,
 ) -> str:
     """
     轮询 getStatus 直到拿到短信验证码。
+    on_poll 仅由显式调用方启用；exclude_codes 用于同号重试，跳过已提交验证码。
 
     Returns:
         验证码字符串
@@ -532,9 +678,11 @@ def wait_for_sms_code(
         SmsCodeTimeout —— 超时没收到（上层可换号重试）
         SmsProviderError —— 激活被取消等
     """
+    from core.task_control import sleep as _task_sleep
     own_http = http is None
     http = http or _http()
-    deadline = time.time() + (max_wait or _cfg.SMS_CODE_WAIT)
+    started = time.time()
+    deadline = started + (max_wait or _cfg.SMS_CODE_WAIT)
     interval = poll_interval or _cfg.SMS_POLL_INTERVAL
     try:
         provider = _provider()
@@ -547,6 +695,10 @@ def wait_for_sms_code(
                 check_stop_requested()
             except ImportError:
                 pass
+            if on_poll is not None:
+                on_poll(max(0.0, time.time() - started))
+                if time.time() >= deadline:
+                    break
             round_no += 1
             elapsed = max(0, int(total_wait - max(0, deadline - time.time())))
             remaining_before = max(0, int(deadline - time.time()))
@@ -559,7 +711,7 @@ def wait_for_sms_code(
                 code = str(data.get("code") or "").strip()
                 raw = str(data.get("raw") or "").strip()
                 status = str((data.get("item") or {}).get("status") or "").strip()
-                if code:
+                if code and code not in (exclude_codes or ()):
                     logger.info(f"[SMS:L] 第 {round_no} 轮收到验证码：{code}")
                     return code
                 remaining = max(0, int(deadline - time.time()))
@@ -567,7 +719,7 @@ def wait_for_sms_code(
                     f"[SMS:L] 第 {round_no} 轮未收到验证码，状态={status or raw or 'WAIT'}，"
                     f"{interval}s 后重试（剩余 {remaining}s）"
                 )
-                time.sleep(interval)
+                _task_sleep(interval)
                 continue
 
             if provider == "h":
@@ -575,7 +727,7 @@ def wait_for_sms_code(
                 code = str(data.get("code") or "").strip()
                 raw = str(data.get("raw") or "").strip()
                 status = str((data.get("item") or {}).get("status") or "").strip()
-                if code:
+                if code and code not in (exclude_codes or ()):
                     logger.info(f"[SMS:H] 第 {round_no} 轮收到验证码：{code}")
                     return code
                 remaining = max(0, int(deadline - time.time()))
@@ -583,30 +735,47 @@ def wait_for_sms_code(
                     f"[SMS:H] 第 {round_no} 轮未收到验证码，状态={status or raw or 'WAIT'}，"
                     f"{interval}s 后重试（剩余 {remaining}s）"
                 )
-                time.sleep(interval)
+                _task_sleep(interval)
+                continue
+
+            if provider == "tiger":
+                data = _request_tiger(http, {"action": "getStatusV2", "id": activation_id})
+                if not isinstance(data, dict) or type(data.get("verificationType")) is not int or data["verificationType"] not in (0, 1):
+                    raise SmsProviderError("Tiger SMS getStatusV2 响应格式异常")
+                sms = data.get("sms")
+                if data["verificationType"] == 1:
+                    if not isinstance(sms, dict) or not str(sms.get("code") or "").strip():
+                        raise SmsProviderError("Tiger SMS getStatusV2 短信响应缺少验证码")
+                    code = str(sms["code"]).strip()
+                    if code not in (exclude_codes or ()):
+                        return code
+                _task_sleep(interval)
                 continue
 
             if provider == "smsbower":
                 text = _request_smsbower(http, {"action": "getStatus", "id": activation_id})
                 if text.startswith("STATUS_OK:"):
-                    return text.split(":", 1)[1].strip().strip("'")
+                    code = text.split(":", 1)[1].strip().strip("'")
+                    if code and code not in (exclude_codes or ()):
+                        return code
                 if text == "STATUS_CANCEL":
                     raise SmsProviderError("SMSBower 激活已被取消（STATUS_CANCEL）")
-                time.sleep(interval)
+                _task_sleep(interval)
                 continue
 
             text = _request_grizzly(http, {"action": "getStatus", "id": activation_id})
 
             if text.startswith("STATUS_OK:"):
                 code = text.split(":", 1)[1].strip()
-                logger.info(f"[SMS] 第 {round_no} 轮收到验证码：{code}")
-                return code
+                if code and code not in (exclude_codes or ()):
+                    logger.info(f"[SMS] 第 {round_no} 轮收到验证码：{code}")
+                    return code
             if text == "STATUS_CANCEL":
                 raise SmsProviderError("激活已被取消（STATUS_CANCEL）")
             # STATUS_WAIT_CODE / STATUS_WAIT_RETRY:* / STATUS_WAIT_RESEND → 继续等
             remaining = max(0, int(deadline - time.time()))
             logger.info(f"[SMS] 第 {round_no} 轮未收到验证码，状态={text}，{interval}s 后重试（剩余 {remaining}s）")
-            time.sleep(interval)
+            _task_sleep(interval)
 
         raise SmsCodeTimeout(f"等待短信超时（>{total_wait}s），activation_id={activation_id}")
     finally:
@@ -629,8 +798,14 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
     own_http = http is None
     http = http or _http()
     try:
-        if _provider() == "l":
-            logger.debug(f"[SMS:L] 忽略状态设置 id={activation_id}, status={status}")
+        if _provider() in ("l", "h"):
+            logger.debug("[SMS:%s] 本地平台不使用 handler_api 状态设置 id=%s status=%s", _provider(), activation_id, status)
+            return "OK"
+        if _provider() == "tiger":
+            data = _request_tiger(http, {"action": "setStatusV2", "status": str(status), "id": activation_id})
+            if not isinstance(data, dict) or data.get("status") != "success":
+                raise SmsProviderError("Tiger SMS setStatusV2 非预期响应")
+            # 保持公共 set_status() 的字符串返回契约，调用方无需跟着平台版本改动。
             return "OK"
         if _provider() == "smsbower":
             if int(status) == 1:
@@ -706,6 +881,43 @@ def _do_cancel_sync(activation_id: str, http_factory) -> None:
             pass
 
 
+def _cancel_tiger_sync(activation_id: str, base: str, api_key: str) -> None:
+    """独立 session/配置快照；按 V2 EARLY_CANCEL_DENIED.info 调整等待时间。"""
+    http = _http()
+    started = time.time()
+    try:
+        for attempt in range(3):
+            try:
+                logger.info("[Tiger SMS] 请求取消号码 id=%s，第 %s/3 次", activation_id, attempt + 1)
+                data = _request_tiger(http, {"action": "setStatusV2", "status": "8", "id": activation_id},
+                                      base=base, api_key=api_key)
+                if not isinstance(data, dict) or data.get("status") != "success":
+                    raise SmsProviderError("Tiger SMS setStatusV2 未确认取消成功")
+                _ACQUIRED_AT.pop(activation_id, None)
+                logger.info("[Tiger SMS] 号码取消成功 id=%s", activation_id)
+                return
+            except _TigerApiError as exc:
+                if exc.code == "EARLY_CANCEL_DENIED" and attempt < 2:
+                    try:
+                        minimum = float(exc.info.get("minActivationTime", _MIN_CANCEL_DELAY))
+                    except (TypeError, ValueError, OverflowError):
+                        minimum = _MIN_CANCEL_DELAY
+                    if not math.isfinite(minimum) or minimum < 0:
+                        minimum = _MIN_CANCEL_DELAY
+                    acquired_at = _ACQUIRED_AT.get(activation_id, started)
+                    wait = max(1, minimum - max(0, time.time() - acquired_at) + 1)
+                    logger.info("[Tiger SMS] 平台暂不允许取消，%.0fs 后重试 id=%s", wait, activation_id)
+                    time.sleep(wait)
+                    continue
+                # SMS_RECEIVED 表示号码仍然有效，不能当作取消成功或已退款。
+                logger.warning("[Tiger SMS] 取消失败，保留激活记录：id=%s, %s", activation_id, exc)
+                return
+    except Exception as exc:
+        logger.warning("[Tiger SMS] 取消请求失败：id=%s, %s", activation_id, exc)
+    finally:
+        http.close()
+
+
 def cancel(activation_id: str, http: CurlSession | None = None, background: bool = True) -> None:
     """
     取消激活（status=8），释放号码避免白扣费。
@@ -718,6 +930,15 @@ def cancel(activation_id: str, http: CurlSession | None = None, background: bool
 
     失败只告警不抛，不影响主流程。
     """
+    if _provider() == "tiger":
+        args = (activation_id, _cfg.TIGER_SMS_API_BASE, _cfg.TIGER_SMS_API_KEY)
+        if background:
+            logger.info("[Tiger SMS] 已提交后台取消 id=%s", activation_id)
+            threading.Thread(target=_cancel_tiger_sync, args=args,
+                             name=f"tiger-cancel-{activation_id}", daemon=True).start()
+        else:
+            _cancel_tiger_sync(*args)
+        return
     if _provider() == "l":
         try:
             _release_l_number(activation_id, http=http)

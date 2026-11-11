@@ -111,6 +111,10 @@ def _compact_account_for_list(row: dict) -> dict:
             extra = {}
     elif isinstance(extra_raw, dict):
         extra = extra_raw
+    if not isinstance(extra, dict):
+        extra = {}
+    if extra.get("registration_stage"):
+        out["registration_stage"] = extra["registration_stage"]
     password = str(
         extra.get("registration_password")
         or row.get("registration_password")
@@ -2489,6 +2493,21 @@ def create_app(auth_code: str | None = None) -> Flask:
 
         return jsonify({"ok": True, "message": "已重置补跑中状态", "status": new_status})
 
+    @app.post("/api/accounts/<int:account_id>/continue-registration")
+    def api_continue_registration(account_id: int):
+        from core.registration_service import submit_registration_resume
+        result = submit_registration_resume(account_id)
+        return jsonify(result), result.get("status", 200)
+
+    @app.post("/api/accounts/continue-registration-bulk")
+    def api_continue_registration_bulk():
+        from core.registration_service import submit_registration_resume_bulk
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"ok": False, "error": "请求体必须是 JSON 对象"}), 400
+        result = submit_registration_resume_bulk(data.get('account_ids'), data.get('workers', 1))
+        return jsonify(result), result.get('status', 200)
+
     @app.post("/api/codex/retry")
     def api_codex_retry():
         """手动补跑某账号的 Codex 授权。Body {email}。"""
@@ -2499,6 +2518,8 @@ def create_app(auth_code: str | None = None) -> Flask:
         acc = db.get_account_by_email(email)
         if acc is None:
             return jsonify({"ok": False, "error": f"账号不存在: {email}"}), 404
+        if db._matches_codex_status_filter(acc, "password_registered"):
+            return jsonify({"ok": False, "error": "账号注册未完成，请先点击继续注册"}), 409
         if (acc.get("live_check_status") or "") == "deactivated":
             return jsonify({"ok": False, "error": "账号已废号，不能补跑 Codex"}), 409
         if not _reserve_codex_retry(email):
@@ -2550,6 +2571,9 @@ def create_app(auth_code: str | None = None) -> Flask:
             email = (acc.get("email") or "").strip()
             if not email:
                 skipped.append({"id": acc_id, "reason": "邮箱为空"})
+                continue
+            if db._matches_codex_status_filter(acc, "password_registered"):
+                skipped.append({"id": acc_id, "email": email, "reason": "注册未完成，请先继续注册"})
                 continue
             if (acc.get("live_check_status") or "") == "deactivated":
                 skipped.append({"id": acc_id, "email": email, "reason": "账号已废号"})
@@ -3048,6 +3072,18 @@ def create_app(auth_code: str | None = None) -> Flask:
     @app.get("/api/config")
     def api_config_get():
         return jsonify(config_editor.get_config())
+
+    @app.get("/api/sms/tiger/catalog")
+    def api_tiger_sms_catalog():
+        """只读查询项目及项目下有库存的国家，不触发取号或扣费。"""
+        from core.sms_provider import get_tiger_catalog, SmsProviderError
+        try:
+            result = get_tiger_catalog(service=request.args.get("service"))
+            return jsonify({"ok": True, **result})
+        except SmsProviderError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except Exception:
+            return jsonify({"ok": False, "error": "Tiger SMS 目录查询失败，请检查网络后重试"}), 502
 
     @app.get("/api/mailcode/catalog")
     def api_mailcode_catalog():
