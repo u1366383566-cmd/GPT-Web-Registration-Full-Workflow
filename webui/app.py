@@ -16,7 +16,10 @@ import json
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 from flask import Flask, Response, jsonify, make_response, render_template, request
 import pyotp
@@ -25,9 +28,11 @@ from core import account_inspection_service, codex_retry_service, db, plan_check
 from core import chatgpt2api_client
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
+from config import codex as _codex_cfg
 from webui import config_editor
 
 logger = logging.getLogger(__name__)
+_VAK_SUPPORTED_COUNTRY_CACHE: dict[str, tuple[float, list[dict]]] = {}
 
 
 def _chatgpt_import_target(data: dict) -> str:
@@ -56,6 +61,275 @@ def _with_pool_source(rows: list[dict], source: str) -> list[dict]:
             x["copy_line"] = x.get("email") or ""
         out.append(x)
     return out
+
+
+def _vak_api_base() -> str:
+    base = str(getattr(_codex_cfg, "VAK_API_BASE", "") or "").strip().rstrip("/")
+    if base.endswith("/v1") or base.endswith("/partner/v1") or base.endswith("/agent/v1") or base.endswith("/backend"):
+        parsed = urlparse(base)
+        base = f"{parsed.scheme}://{parsed.netloc}/api"
+    return base or "https://vak-sms.com/api"
+
+
+def _vak_api_key() -> str:
+    token = str(getattr(_codex_cfg, "VAK_API_KEY", "") or "").strip()
+    if not token and str(getattr(_codex_cfg, "SMS_PROVIDER", "") or "").strip().lower() == "vak":
+        token = str(getattr(_codex_cfg, "SMS_API_KEY", "") or "").strip()
+    return token
+
+
+def _vak_fetch(path: str, *, params: dict | None = None, timeout: int = 20) -> tuple[int, object, str]:
+    from urllib.parse import urlencode
+    url = _vak_api_base().rstrip("/") + "/" + path.lstrip("/")
+    q = {"apiKey": _vak_api_key()}
+    if params:
+        for k, v in params.items():
+            if v is None or str(v).strip() == "":
+                continue
+            q[k] = v
+    if q:
+        url += "?" + urlencode(q)
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    req = Request(url, headers=headers)
+    try:
+        with urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8", "ignore")
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = raw
+            return r.status, data, url
+    except HTTPError as e:
+        raw = e.read().decode("utf-8", "ignore") if hasattr(e, "read") else ""
+        try:
+            data = json.loads(raw) if raw else {"error": getattr(e, "reason", str(e))}
+        except Exception:
+            data = {"error": raw or getattr(e, "reason", str(e))}
+        return int(getattr(e, "code", 500) or 500), data, url
+    except URLError as e:
+        return 500, {"error": str(getattr(e, "reason", e))}, url
+
+
+def _vak_country_options(payload: object) -> list[dict]:
+    options: list[dict] = []
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("countryCode") or item.get("code") or item.get("id") or item.get("name") or "").strip()
+            if not value:
+                continue
+            options.append({
+                "value": value,
+                "label": str(item.get("countryName") or item.get("name") or value).strip() or value,
+                "operators": item.get("operatorList") or [],
+                "count": item.get("count"),
+            })
+    elif isinstance(payload, dict):
+        for key, item in payload.items():
+            raw = None
+            if isinstance(item, list):
+                raw = next((x for x in item if isinstance(x, dict)), None)
+            elif isinstance(item, dict):
+                raw = item
+            if not isinstance(raw, dict):
+                continue
+            value = str(key or raw.get("countryCode") or raw.get("code") or raw.get("name") or "").strip()
+            if not value:
+                continue
+            options.append({
+                "value": value,
+                "label": str(raw.get("countryName") or raw.get("name") or key).strip() or value,
+                "count": raw.get("count"),
+                "icon": raw.get("icon"),
+                "operators": raw.get("operators") or {},
+            })
+    seen = set()
+    uniq = []
+    for opt in options:
+        value = opt.get("value")
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        uniq.append(opt)
+    return uniq
+
+
+def _vak_service_options(payload: object) -> list[dict]:
+    options: list[dict] = []
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict):
+                value = str(item.get("code") or item.get("service") or item.get("id") or item.get("name") or "").strip()
+                if not value:
+                    continue
+                label = str(item.get("name") or item.get("label") or item.get("title") or value).strip() or value
+                options.append({"value": value, "label": label, "cost": item.get("cost"), "quantity": item.get("quantity"), "icon": item.get("icon")})
+            elif item is not None:
+                value = str(item).strip()
+                if value:
+                    options.append({"value": value, "label": value})
+    elif isinstance(payload, dict):
+        for key, item in payload.items():
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("code") or key).strip()
+            if not value:
+                continue
+            options.append({
+                "value": value,
+                "label": str(item.get("name") or item.get("label") or value).strip() or value,
+                "cost": item.get("cost"),
+                "quantity": item.get("quantity"),
+                "icon": item.get("icon"),
+            })
+    seen = set()
+    uniq = []
+    for opt in options:
+        value = opt.get("value")
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        uniq.append(opt)
+    return uniq
+
+
+def _vak_price_options(payload: object, service_code: str | None = None) -> list[dict]:
+    prices: list[dict] = []
+    if isinstance(payload, dict):
+        info = None
+        if service_code and isinstance(payload.get(service_code), dict):
+            info = payload.get(service_code)
+        if not isinstance(info, dict):
+            info = next((v for v in payload.values() if isinstance(v, dict) and isinstance(v.get("priceMap"), dict)), None)
+        if isinstance(info, dict):
+            for price, count in info.get("priceMap", {}).items():
+                try:
+                    price_f = float(price)
+                except Exception:
+                    continue
+                label = f"{price_f:g}"
+                if count is not None:
+                    label += f" · 库存 {count}"
+                prices.append({"value": f"{price_f:g}", "label": label, "count": count, "price": price_f})
+    prices.sort(key=lambda x: float(x["value"]))
+    return prices
+
+
+def _vak_merge_country_data(country_list: object, operator_list: object) -> list[dict]:
+    countries = _vak_country_options(country_list)
+    operator_map = operator_list if isinstance(operator_list, dict) else {}
+    merged: list[dict] = []
+
+    for country in countries:
+        code = str(country.get("value") or "").strip()
+        raw = dict(country)
+        op_row = None
+        for key, value in operator_map.items():
+            if str(key).strip().lower() == code.lower():
+                op_row = value if isinstance(value, dict) else None
+                break
+            if isinstance(value, dict) and str(value.get("name") or "").strip().lower() == code.lower():
+                op_row = value
+                break
+        if isinstance(op_row, dict):
+            raw.update(op_row)
+        merged.append({
+            "value": code,
+            "label": str(raw.get("label") or code).strip() or code,
+            "count": raw.get("count"),
+            "icon": raw.get("icon"),
+            "operators": raw.get("operators") or country.get("operators") or [],
+            "raw": raw,
+        })
+
+    if not merged:
+        for key, value in operator_map.items():
+            raw = None
+            if isinstance(value, list):
+                raw = next((x for x in value if isinstance(x, dict)), None)
+            elif isinstance(value, dict):
+                raw = value
+            if not isinstance(raw, dict):
+                continue
+            code = str(key or raw.get("countryCode") or raw.get("code") or "").strip()
+            if not code:
+                continue
+            merged.append({
+                "value": code,
+                "label": str(raw.get("name") or code).strip() or code,
+                "count": raw.get("count"),
+                "icon": raw.get("icon"),
+                "operators": raw.get("operators") or {},
+                "raw": raw,
+            })
+
+    def _count_key(row: dict) -> int:
+        try:
+            return int(row.get("count") or 0)
+        except Exception:
+            return 0
+
+    merged.sort(key=lambda x: (-_count_key(x), str(x.get("label") or x.get("value") or "")))
+    return merged
+
+
+def _vak_country_has_prices(country: dict, service_id: str) -> dict | None:
+    code = str(country.get("value") or "").strip()
+    if not code:
+        return None
+    status, payload, _url = _vak_fetch(
+        "/getOfferNumberList",
+        params={"country": code, "services": service_id},
+        timeout=8,
+    )
+    if status < 200 or status >= 300:
+        return None
+    prices = _vak_price_options(payload, service_id)
+    if not prices:
+        return None
+    row = dict(country)
+    row["priceCount"] = len(prices)
+    row["minPrice"] = prices[0].get("price")
+    row["totalCount"] = sum(int(p.get("count") or 0) for p in prices)
+    row["offerCount"] = row["totalCount"]
+    row["prices"] = prices
+    return row
+
+
+def _vak_supported_countries_for_service(countries: list[dict], service_id: str) -> list[dict]:
+    service_id = str(service_id or "").strip()
+    cache_key = service_id
+    now = time.time()
+    cached = _VAK_SUPPORTED_COUNTRY_CACHE.get(cache_key)
+    if cached and now - cached[0] < 180:
+        return [dict(x) for x in cached[1]]
+
+    supported: list[dict] = []
+    # Vak 国家数量不大；并发探测每个国家是否支持当前服务，避免页面展示“选了但无价格”的国家。
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = [pool.submit(_vak_country_has_prices, c, service_id) for c in countries[:260]]
+        try:
+            iterator = as_completed(futures, timeout=18)
+            for fut in iterator:
+                try:
+                    row = fut.result()
+                except Exception:
+                    row = None
+                if row:
+                    supported.append(row)
+        except FuturesTimeoutError:
+            for fut in futures:
+                fut.cancel()
+            logger.warning("[Vak] 探测服务支持国家超时，返回已获取结果 service=%s count=%s", service_id, len(supported))
+
+    supported.sort(key=lambda x: (
+        float(x.get("minPrice") if x.get("minPrice") is not None else 999999),
+        -int(x.get("totalCount") or x.get("count") or 0),
+        str(x.get("label") or x.get("value") or ""),
+    ))
+    _VAK_SUPPORTED_COUNTRY_CACHE[cache_key] = (now, [dict(x) for x in supported])
+    return supported
 
 
 
@@ -3182,6 +3456,103 @@ def create_app(auth_code: str | None = None) -> Flask:
         except Exception as exc:
             logger.exception("获取 CloudMail 域名失败")
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
+
+    @app.get("/api/vak/meta")
+    def api_vak_meta():
+        """加载 Vak 服务、国家与价格，供配置页可视化选择。"""
+        if not _vak_api_key():
+            return jsonify({"ok": False, "error": "请先保存 Vak SMS API Key"}), 400
+        requested_service = (request.args.get("service") or getattr(_codex_cfg, "VAK_PRODUCT", "") or "dr").strip() or "dr"
+        requested_country = (request.args.get("country") or getattr(_codex_cfg, "VAK_COUNTRY", "") or getattr(_codex_cfg, "SMS_COUNTRY", "") or "").strip()
+
+        service_status, service_raw, service_url = _vak_fetch("/getCountNumbersList")
+        services = _vak_service_options(service_raw)
+        if not services:
+            services = [{"value": "dr", "label": "OpenAI"}]
+        if not any(str(s.get("value")) == "dr" for s in services):
+            services.insert(0, {"value": "dr", "label": "OpenAI"})
+        service_selected = next((x for x in services if str(x.get("value")).lower() == requested_service.lower()), None) or services[0]
+        service_id = str(service_selected.get("value") or "dr").strip() or "dr"
+
+        country_status, country_raw, country_url = _vak_fetch("/getCountryList")
+        operator_status, operator_raw, operator_url = _vak_fetch("/getCountryOperatorList")
+        all_countries = _vak_merge_country_data(country_raw, operator_raw)
+        countries = _vak_supported_countries_for_service(all_countries, service_id)
+        if not countries:
+            countries = all_countries
+        selected_country = next(
+            (x for x in countries if str(x.get("value")).lower() == requested_country.lower() or str(x.get("label")).lower() == requested_country.lower()),
+            None,
+        ) if countries else {}
+        if not selected_country and countries:
+            selected_country = countries[0]
+
+        offer_status = 0
+        offer_raw: object = {}
+        offer_url = ""
+        prices = []
+        selected_country_code = str((selected_country or {}).get("value") or "").strip()
+        if isinstance(selected_country, dict) and isinstance(selected_country.get("prices"), list):
+            prices = selected_country.get("prices") or []
+        elif selected_country_code:
+            offer_status, offer_raw, offer_url = _vak_fetch("/getOfferNumberList", params={"country": selected_country_code, "services": service_id})
+            prices = _vak_price_options(offer_raw, service_id)
+            if isinstance(selected_country, dict):
+                selected_country["prices"] = prices
+                selected_country["offerCount"] = sum(int(p.get("count") or 0) for p in prices)
+                selected_country["totalCount"] = selected_country.get("offerCount")
+                selected_country["minPrice"] = prices[0].get("price") if prices else selected_country.get("minPrice")
+
+        offer_info = {
+            "service": service_id,
+            "offers": prices,
+        }
+
+        selected_price = ""
+        if prices:
+            current_max = str(getattr(_codex_cfg, "VAK_MAX_PRICE", "") or "").strip()
+            current_max_f = 0.0
+            try:
+                current_max_f = float(current_max) if current_max else 0.0
+            except Exception:
+                current_max_f = 0.0
+            if current_max and current_max_f > 0:
+                try:
+                    selected_price = f"{float(current_max):g}"
+                except Exception:
+                    selected_price = current_max
+            else:
+                selected_price = str(prices[0].get("value") or "").strip()
+        else:
+            fallback_price = str(getattr(_codex_cfg, "VAK_MAX_PRICE", "") or "0").strip() or "0"
+            try:
+                selected_price = f"{float(fallback_price):g}"
+            except Exception:
+                selected_price = fallback_price
+
+        return jsonify({
+            "ok": True,
+            "base": _vak_api_base(),
+            "service_id": service_id,
+            "service_name": service_selected.get("label") or service_id,
+            "services": services,
+            "selected_service": service_selected,
+            "country_status": country_status,
+            "country_url": country_url,
+            "operator_status": operator_status,
+            "operator_url": operator_url,
+            "offer_status": offer_status,
+            "offer_url": offer_url,
+            "selected_country": dict(selected_country, offerCount=(prices and sum(int(p.get("count") or 0) for p in prices)) or selected_country.get("offerCount") or selected_country.get("totalCount") or selected_country.get("count")),
+            "countries": countries,
+            "all_country_count": len(all_countries),
+            "selected_price": selected_price,
+            "prices": prices,
+            "offer": offer_info,
+            "service_url": service_url,
+            "service_status": service_status,
+            "message": f"已加载 Vak：服务 {service_selected.get('label') or service_id} 支持国家 {len(countries)} 个，当前国家价格档位 {len(prices)} 个",
+        })
 
     @app.post("/api/config")
     def api_config_set():

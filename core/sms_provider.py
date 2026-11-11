@@ -11,6 +11,7 @@
     - GrizzlySMS：GET 文本接口，文档 https://api.grizzlysms.com
     - SMSBower：GET handler_api 兼容接口，文档 https://smsbower.app/cn/api?page=client
     - Tiger SMS：GET handler_api 接口，文档 https://tiger-sms.com/cn/api
+    - Vak SMS：GET JSON 接口，文档 https://vak-sms.com/backend/api/docs
     - L：本地 JSON 管理接口，文档 L_API.md
     - H：本地 JSON 管理接口，文档 H_API.md
 
@@ -19,15 +20,68 @@
     - 成功拿到码后 complete(6) 正式完成激活。
 """
 import json
+import json as json_module
 import logging
 import math
+import re
 import threading
 import time
 from decimal import Decimal, InvalidOperation
 from typing import Callable
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin, urlparse, urlencode
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
-from curl_cffi.requests import Session as CurlSession
+try:  # pragma: no cover - 运行环境未装 curl_cffi 时启用后备实现
+    from curl_cffi.requests import Session as CurlSession
+except Exception:  # pragma: no cover
+    class _FallbackResponse:
+        def __init__(self, status_code: int, text: str):
+            self.status_code = status_code
+            self.text = text
+
+        def json(self):
+            return json.loads(self.text)
+
+    class CurlSession:  # type: ignore[override]
+        def __init__(self, impersonate=None):
+            self.timeout = 30
+
+        def get(self, url, headers=None, params=None):
+            query = urlencode({k: v for k, v in (params or {}).items() if v is not None and str(v).strip() != ""})
+            full_url = url + ("?" + query if query else "")
+            req = Request(full_url, headers=headers or {})
+            try:
+                with urlopen(req, timeout=self.timeout) as resp:
+                    text = resp.read().decode("utf-8", "ignore")
+                    return _FallbackResponse(getattr(resp, "status", 200), text)
+            except HTTPError as exc:
+                text = exc.read().decode("utf-8", "ignore") if hasattr(exc, "read") else ""
+                return _FallbackResponse(getattr(exc, "code", 500) or 500, text)
+            except URLError as exc:
+                raise RuntimeError(str(getattr(exc, "reason", exc))) from exc
+
+        def post(self, url, headers=None, params=None, json=None):
+            query = urlencode({k: v for k, v in (params or {}).items() if v is not None and str(v).strip() != ""})
+            full_url = url + ("?" + query if query else "")
+            data = None
+            if json is not None:
+                data = json_module.dumps(json).encode("utf-8")
+            req_headers = dict(headers or {})
+            req_headers.setdefault("Content-Type", "application/json")
+            req = Request(full_url, data=data, headers=req_headers, method="POST")
+            try:
+                with urlopen(req, timeout=self.timeout) as resp:
+                    text = resp.read().decode("utf-8", "ignore")
+                    return _FallbackResponse(getattr(resp, "status", 200), text)
+            except HTTPError as exc:
+                text = exc.read().decode("utf-8", "ignore") if hasattr(exc, "read") else ""
+                return _FallbackResponse(getattr(exc, "code", 500) or 500, text)
+            except URLError as exc:
+                raise RuntimeError(str(getattr(exc, "reason", exc))) from exc
+
+        def close(self):
+            return None
 
 # 注意：用 `from config import codex` 而不是 `from config.codex import X`，
 # 这样 WebUI 调 config.reload_all() 后，本模块通过 codex.X 读到的是最新值。
@@ -498,6 +552,309 @@ def _h_phone_acquire_mode() -> str:
     return "reusable"
 
 
+def _vak_api_base() -> str:
+    base = str(getattr(_cfg, "VAK_API_BASE", "") or "").strip()
+    if not base:
+        raise SmsProviderError("VAK_API_BASE 不能为空")
+    base = base.rstrip("/")
+    if base.endswith("/v1") or base.endswith("/partner/v1") or base.endswith("/agent/v1") or base.endswith("/backend"):
+        parsed = urlparse(base)
+        base = f"{parsed.scheme}://{parsed.netloc}/api"
+    return base
+
+
+def _vak_api_key() -> str:
+    # 优先 Vak 专用密钥；为空时回退通用短信密钥，方便旧环境平滑迁移。
+    token = str(getattr(_cfg, "VAK_API_KEY", "") or getattr(_cfg, "SMS_API_KEY", "") or "").strip()
+    if not token:
+        raise SmsProviderError("VAK_API_KEY/SMS_API_KEY 不能为空")
+    return token
+
+
+def _vak_url(path: str) -> str:
+    return urljoin(_vak_api_base() + "/", path.lstrip("/"))
+
+
+def _vak_params(params: dict | None = None) -> dict:
+    out = {"apiKey": _vak_api_key()}
+    for key, value in (params or {}).items():
+        if value is None:
+            continue
+        if str(value).strip() == "":
+            continue
+        out[key] = value
+    return out
+
+
+def _vak_path_part(value: str, name: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        raise SmsProviderError(f"Vak {name} 不能为空")
+    return quote(value, safe="")
+
+
+def _vak_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None or str(value).strip() == "":
+            return default
+        return float(str(value).strip())
+    except Exception:
+        return default
+
+
+def _raise_vak_error(resp, data, text: str) -> None:
+    error = ""
+    status = getattr(resp, "status_code", 0) or 0
+    if isinstance(data, dict):
+        error = str(
+            data.get("error")
+            or data.get("message")
+            or data.get("status")
+            or data.get("detail")
+            or ""
+        ).strip()
+    elif isinstance(data, list) and data:
+        error = str(data[0]).strip()
+    combined = (error or text or f"HTTP {status or '?'}").strip()
+    low = combined.lower()
+    if "api key" in low and ("invalid" in low or "unauthorized" in low or "unauthor" in low):
+        raise SmsProviderError(f"Vak API key 无效或未授权：{combined[:200]}")
+    if "balance" in low and ("not enough" in low or "insufficient" in low or "low" in low):
+        raise SmsNoBalanceError(f"Vak 余额不足：{combined[:200]}")
+    if "no free phone" in low or "no free phones" in low or "no numbers" in low or "empty" in low:
+        raise SmsNoNumbersError(f"Vak 暂无可用号码：{combined[:200]}")
+    if status == 401 or status == 403:
+        raise SmsProviderError(f"Vak API 未授权：{combined[:200]}")
+    if status == 429:
+        raise SmsProviderError(f"Vak 请求过于频繁：{combined[:200]}")
+    raise SmsProviderError(f"Vak 请求失败：{combined[:200]}")
+
+
+def _get_vak_json(http: CurlSession, path: str, params: dict | None = None):
+    resp = http.get(_vak_url(path), params=_vak_params(params), headers={"Accept": "application/json"})
+    text = (resp.text or "").strip()
+    try:
+        data = resp.json()
+    except Exception:
+        try:
+            data = json.loads(text)
+        except Exception:
+            data = None
+
+    if resp.status_code < 200 or resp.status_code >= 300:
+        _raise_vak_error(resp, data, text)
+    if isinstance(data, dict) and data.get("error"):
+        _raise_vak_error(resp, data, text)
+    return data
+
+
+def _extract_vak_code_from_sms_list(items) -> str:
+    if not isinstance(items, list):
+        return ""
+    # 从最新短信开始找。Vak schema 中 code 字段最可靠；没有 code 时从 text 中兜底提取 4-8 位数字。
+    for item in reversed(items):
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "").strip()
+        if code:
+            return code
+        text = str(item.get("text") or "").strip()
+        m = re.search(r"(?<!\d)(\d{4,8})(?!\d)", text)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _extract_vak_code(data: dict) -> str:
+    code = _extract_vak_code_from_sms_list(data.get("sms"))
+    if code:
+        return code
+    if isinstance(data.get("smsCode"), list):
+        return _extract_vak_code_from_sms_list(data.get("smsCode"))
+    if isinstance(data.get("smsCode"), str):
+        return str(data.get("smsCode") or "").strip()
+    return _extract_vak_code_from_sms_list(data.get("Data"))
+
+
+def _vak_extract_dict_rows(payload: object) -> list[dict]:
+    if isinstance(payload, list):
+        return [x for x in payload if isinstance(x, dict)]
+    if isinstance(payload, dict):
+        rows = payload.get("data")
+        if isinstance(rows, list):
+            return [x for x in rows if isinstance(x, dict)]
+        rows = payload.get("items")
+        if isinstance(rows, list):
+            return [x for x in rows if isinstance(x, dict)]
+    return []
+
+
+def _vak_parse_service_rows(payload: object) -> list[dict]:
+    rows = _vak_extract_dict_rows(payload)
+    out = []
+    for row in rows:
+        code = str(row.get("code") or row.get("service") or row.get("name") or row.get("id") or "").strip()
+        if not code:
+            continue
+        out.append({
+            "value": code,
+            "label": str(row.get("name") or row.get("label") or row.get("title") or code).strip() or code,
+            "quantity": row.get("quantity"),
+            "cost": row.get("cost"),
+            "rent": row.get("rent"),
+            "private": row.get("private"),
+            "icon": row.get("icon"),
+            "info": row.get("info"),
+        })
+    return out
+
+
+def _vak_parse_countries(payload: object) -> list[dict]:
+    out: list[dict] = []
+    if isinstance(payload, list):
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("countryCode") or row.get("code") or row.get("id") or row.get("name") or "").strip()
+            if not code:
+                continue
+            out.append({
+                "value": code,
+                "label": str(row.get("countryName") or row.get("name") or code).strip() or code,
+                "operators": row.get("operatorList") or [],
+                "count": row.get("count"),
+                "icon": row.get("icon"),
+                "raw": row,
+            })
+        return out
+    if isinstance(payload, dict):
+        for key, row in payload.items():
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("name") or key).strip()
+            if not code:
+                continue
+            out.append({
+                "value": code,
+                "label": code,
+                "count": row.get("count"),
+                "icon": row.get("icon"),
+                "operators": row.get("operators") or {},
+                "raw": row,
+            })
+    return out
+
+
+def _vak_merge_country_data(country_list: object, operator_list: object) -> list[dict]:
+    countries = _vak_parse_countries(country_list)
+    operator_map = operator_list if isinstance(operator_list, dict) else {}
+    merged = []
+    for country in countries:
+        code = str(country.get("value") or "").strip()
+        op_row = None
+        for key, value in operator_map.items():
+            if str(key).strip().lower() == code.lower():
+                op_row = value if isinstance(value, dict) else None
+                break
+            if isinstance(value, dict) and str(value.get("name") or "").strip().lower() == code.lower():
+                op_row = value
+                break
+        raw = dict(country.get("raw") or {})
+        if isinstance(op_row, dict):
+            raw.update(op_row)
+        merged.append({
+            "value": code,
+            "label": str(country.get("label") or code).strip() or code,
+            "count": raw.get("count", country.get("count")),
+            "icon": raw.get("icon", country.get("icon")),
+            "operators": country.get("operators") or raw.get("operators") or [],
+            "raw": raw,
+        })
+    if not merged:
+        for key, value in operator_map.items():
+            if not isinstance(value, dict):
+                continue
+            code = str(value.get("name") or key).strip()
+            if not code:
+                continue
+            merged.append({
+                "value": code,
+                "label": code,
+                "count": value.get("count"),
+                "icon": value.get("icon"),
+                "operators": value.get("operators") or {},
+                "raw": value,
+            })
+    merged.sort(key=lambda x: (-int(x.get("count") or 0), str(x.get("label") or x.get("value") or "")))
+    return merged
+
+
+def _vak_parse_offer_info(payload: object, service_code: str) -> dict:
+    data = payload if isinstance(payload, dict) else {}
+    info = data.get(service_code) if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        if isinstance(data, dict) and data:
+            info = next((v for v in data.values() if isinstance(v, dict)), None)
+        else:
+            info = None
+    if not isinstance(info, dict):
+        return {"service": service_code, "offers": [], "totalCount": 0, "minPrice": 0.0, "apiPrice": 0.0, "priceMap": {}}
+    price_map = info.get("priceMap") if isinstance(info.get("priceMap"), dict) else {}
+    offers = []
+    for price, count in price_map.items():
+        try:
+            price_f = float(price)
+        except Exception:
+            continue
+        try:
+            count_i = int(count)
+        except Exception:
+            count_i = 0
+        offers.append({
+            "value": f"{price_f:g}",
+            "label": f"{price_f:g}" + (f" · 库存 {count_i}" if count is not None else ""),
+            "price": price_f,
+            "count": count_i,
+        })
+    offers.sort(key=lambda x: float(x["value"]))
+    return {
+        "service": service_code,
+        "name": str(info.get("name") or service_code).strip() or service_code,
+        "totalCount": int(info.get("totalCount") or 0),
+        "minPrice": _vak_float(info.get("minPrice"), 0.0),
+        "apiPrice": _vak_float(info.get("apiPrice"), 0.0),
+        "priceMap": price_map,
+        "offers": offers,
+        "raw": info,
+    }
+
+
+def _vak_pick_offer_price(offer_info: dict, max_price: float) -> float:
+    offers = offer_info.get("offers") if isinstance(offer_info, dict) else []
+    prices: list[float] = []
+    for row in offers if isinstance(offers, list) else []:
+        try:
+            price = float(row.get("price"))
+        except Exception:
+            continue
+        try:
+            count_i = int(row.get("count") or 0)
+        except Exception:
+            count_i = 0
+        if count_i <= 0:
+            continue
+        prices.append(price)
+    prices = sorted(set(prices))
+    if not prices:
+        raise SmsNoNumbersError("Vak 未返回可用价格档位")
+    if max_price > 0:
+        eligible = [p for p in prices if p <= max_price]
+        if not eligible:
+            raise SmsNoNumbersError(f"Vak 没有不高于 {max_price:g} 的可用价格档位")
+        return eligible[-1]
+    return prices[0]
+
+
 # ============================================================
 # 取号
 # ============================================================
@@ -629,6 +986,60 @@ def acquire_number(
             )
             return activation_id, phone
 
+        if _provider() == "vak":
+            service_code = _vak_path_part(service or getattr(_cfg, "VAK_PRODUCT", "dr") or "dr", "service")
+            country_raw = country or getattr(_cfg, "VAK_COUNTRY", "") or _cfg.SMS_COUNTRY
+            operator = str(getattr(_cfg, "VAK_OPERATOR", "any") or "any").strip() or "any"
+            max_price = _vak_float(getattr(_cfg, "VAK_MAX_PRICE", 0.0), 0.0)
+
+            offers = _get_vak_json(
+                http,
+                "/getOfferNumberList",
+                params={"country": country_raw, "services": service_code},
+            )
+            offer_info = _vak_parse_offer_info(offers, service_code)
+            chosen_price = _vak_pick_offer_price(offer_info, max_price)
+            country_code = _vak_path_part(country_raw, "country")
+
+            params = {
+                "service": service_code,
+                "country": country_code,
+                "price": f"{chosen_price:g}",
+                "maxPrice": f"{max_price:g}" if max_price > 0 else None,
+                "fixedPrice": "true",
+            }
+            if operator and operator.lower() != "any":
+                params["operator"] = operator
+            soft_id = str(getattr(_cfg, "VAK_SOFT_ID", "") or "").strip()
+            if soft_id:
+                params["softId"] = soft_id
+
+            data = _get_vak_json(http, "/getNumber", params=params)
+            if isinstance(data, list):
+                data = data[0] if data else {}
+            if not isinstance(data, dict):
+                raise SmsProviderError(f"Vak 下单响应不是对象：{str(data)[:200]}")
+            activation_id = str(data.get("idNum") or data.get("id") or "").strip()
+            raw_phone = str(data.get("tel") or data.get("phone") or data.get("phoneNumber") or "").strip()
+            phone = _normalize_phone_digits(raw_phone)
+            if not phone and activation_id:
+                phone = _normalize_phone_digits(activation_id)
+            if not activation_id or not phone:
+                raise SmsProviderError(f"Vak 下单响应缺少 idNum/tel：{str(data)[:200]}")
+            returned_price = _vak_float(data.get("price"), chosen_price)
+            if max_price > 0 and returned_price > max_price:
+                try:
+                    _get_vak_json(http, "/setStatus", params={"idNum": activation_id, "status": "bad"})
+                except Exception as exc:
+                    logger.warning(f"[SMS:Vak] 价格超限后取消失败 id={activation_id}: {type(exc).__name__}: {exc}")
+                raise SmsNoNumbersError(f"Vak 下单价格 {returned_price} 超过上限 {max_price}")
+            _ACQUIRED_AT[activation_id] = time.time()
+            logger.info(
+                f"[SMS:Vak] 取号成功：id={activation_id}, phone=+{phone}, country={country_raw}, "
+                f"service={service_code}, price={returned_price}, max_price={max_price or None}, fixed_price={chosen_price:g}"
+            )
+            return activation_id, phone
+
         params = {
             "action": "getNumber",
             "service": service or _cfg.SMS_SERVICE,
@@ -682,11 +1093,11 @@ def wait_for_sms_code(
     own_http = http is None
     http = http or _http()
     started = time.time()
-    deadline = started + (max_wait or _cfg.SMS_CODE_WAIT)
-    interval = poll_interval or _cfg.SMS_POLL_INTERVAL
+    deadline = started + (max_wait if max_wait is not None else _cfg.SMS_CODE_WAIT)
+    interval = poll_interval if poll_interval is not None else _cfg.SMS_POLL_INTERVAL
     try:
         provider = _provider()
-        total_wait = max_wait or _cfg.SMS_CODE_WAIT
+        total_wait = max_wait if max_wait is not None else _cfg.SMS_CODE_WAIT
         logger.info(f"[SMS] 等待短信验证码 activation_id={activation_id}，最长 {total_wait}s...")
         round_no = 0
         while time.time() < deadline:
@@ -763,6 +1174,34 @@ def wait_for_sms_code(
                 _task_sleep(interval)
                 continue
 
+            if provider == "vak":
+                try:
+                    data = _get_vak_json(http, "/getSmsCode", params={"idNum": activation_id})
+                except SmsProviderError as exc:
+                    # Vak 的 getSmsCode 在短信刚触发后偶尔会返回 badData，
+                    # 这通常只是验证码尚未入库，不能当作取码失败立即换号。
+                    if "badData" in str(exc):
+                        remaining = max(0, int(deadline - time.time()))
+                        logger.info(
+                            f"[SMS:Vak] 第 {round_no} 轮暂未可取码：badData，"
+                            f"{interval}s 后重试（剩余 {remaining}s）"
+                        )
+                        _task_sleep(interval)
+                        continue
+                    raise
+                code = _extract_vak_code(data if isinstance(data, dict) else {})
+                if code and code not in (exclude_codes or ()):
+                    logger.info(f"[SMS:Vak] 第 {round_no} 轮收到验证码：{code}")
+                    return code
+                status = str(data.get("status") or "").strip() if isinstance(data, dict) else ""
+                remaining = max(0, int(deadline - time.time()))
+                logger.info(
+                    f"[SMS:Vak] 第 {round_no} 轮未收到验证码，状态={status or 'WAIT'}，"
+                    f"{interval}s 后重试（剩余 {remaining}s）"
+                )
+                _task_sleep(interval)
+                continue
+
             text = _request_grizzly(http, {"action": "getStatus", "id": activation_id})
 
             if text.startswith("STATUS_OK:"):
@@ -811,6 +1250,17 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
             if int(status) == 1:
                 return "OK"
             return _request_smsbower(http, {"action": "setStatus", "status": str(status), "id": activation_id})
+        if _provider() == "vak":
+            if int(status) == 6:
+                _get_vak_json(http, "/setStatus", params={"idNum": activation_id, "status": "end"})
+            elif int(status) == 8:
+                _get_vak_json(http, "/setStatus", params={"idNum": activation_id, "status": "bad"})
+            elif int(status) == 1:
+                logger.debug(f"[SMS:Vak] 忽略 status=1，Vak getNumber 后直接轮询 getSmsCode id={activation_id}")
+            elif int(status) == 3:
+                logger.debug(f"[SMS:Vak] 忽略 status=3，Vak getNumber 后直接轮询 getSmsCode id={activation_id}")
+            logger.debug(f"[SMS:Vak] 状态设置完成/忽略 id={activation_id}, status={status}")
+            return "OK"
         return _request_grizzly(http, {"action": "setStatus", "status": str(status), "id": activation_id})
     finally:
         if own_http:
@@ -835,6 +1285,19 @@ def complete(activation_id: str, http: CurlSession | None = None) -> None:
             logger.warning(f"[SMSBower] 标记完成失败（不影响结果）：{exc}")
         finally:
             _ACQUIRED_AT.pop(activation_id, None)
+        return
+    if _provider() == "vak":
+        try:
+            own_http = http is None
+            http = http or _http()
+            _get_vak_json(http, "/setStatus", params={"idNum": activation_id, "status": "end"})
+            logger.info(f"[SMS:Vak] 已完成 id={activation_id}")
+        except Exception as exc:
+            logger.warning(f"[SMS:Vak] 标记完成失败（不影响结果）：id={activation_id}, {type(exc).__name__}: {exc}")
+        finally:
+            _ACQUIRED_AT.pop(activation_id, None)
+            if 'own_http' in locals() and own_http:
+                http.close()
         return
     try:
         set_status(activation_id, 6, http=http)
@@ -960,6 +1423,20 @@ def cancel(activation_id: str, http: CurlSession | None = None, background: bool
             logger.warning(f"[SMSBower] 释放号码失败（不影响主流程）：{exc}")
         finally:
             _ACQUIRED_AT.pop(activation_id, None)
+        return
+    if _provider() == "vak":
+        own_http = http is None
+        http = http or _http()
+        try:
+            _get_vak_json(http, "/setStatus", params={"idNum": activation_id, "status": "bad"})
+            logger.info(f"[SMS:Vak] 已取消 id={activation_id}")
+            _ACQUIRED_AT.pop(activation_id, None)
+        except Exception as exc:
+            logger.warning(f"[SMS:Vak] 取消失败（不影响主流程）：id={activation_id}, {type(exc).__name__}: {exc}")
+            _ACQUIRED_AT.pop(activation_id, None)
+        finally:
+            if own_http:
+                http.close()
         return
 
     if not background:

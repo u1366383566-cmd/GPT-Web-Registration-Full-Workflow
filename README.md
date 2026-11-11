@@ -651,8 +651,11 @@ CODEX_OAUTH_DRIVER = "browser_use"  # 可选 protocol / roxy / cloak / browser_u
 接码配置在 `config/codex.py`：
 
 ```python
-SMS_PROVIDER = "l"        # 可选 grizzly / smsbower / tiger / l / h
-SMS_API_KEY = "你的 GrizzlySMS key"  # 仅 GrizzlySMS 需要
+SMS_PROVIDER = "l"        # 可选 grizzly / smsbower / tiger / l / h / vak
+SMS_API_KEY = "你的 GrizzlySMS key"  # GrizzlySMS 使用；Vak 可作为 VAK_API_KEY 留空时的回退
+VAK_API_BASE = "https://vak-sms.com/partner/v1"  # SMS_PROVIDER="vak" 时使用；agent 可改 /agent/v1
+VAK_API_KEY = "你的 Vak key"
+VAK_OPERATOR = "any"
 SMS_SERVICE = "openai"
 SMS_COUNTRY = "国家代码"
 SMS_MAX_RETRIES = 10

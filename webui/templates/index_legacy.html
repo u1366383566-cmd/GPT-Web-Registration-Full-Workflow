@@ -443,6 +443,22 @@
       background: #fff; color: var(--blue); text-decoration: none; font-size: 12px; font-weight: 800;
     }
     .roxy-invite-link:hover { background: #e0ebff; }
+    .config-ep-select { border: 1px solid var(--line); border-radius: 8px; background: #fff; overflow: hidden; }
+    .config-ep-select-btn {
+      width: 100%; min-height: 34px; border: 0; border-bottom: 1px solid var(--line);
+      background: #f8fafc; text-align: left; padding: 0 10px; font-weight: 800; cursor: default;
+    }
+    .config-ep-select-menu {
+      max-height: 220px; overflow: auto; padding: 8px; display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .config-ep-select-item {
+      border: 1px solid var(--line); background: #fff; color: #475467;
+      border-radius: 999px; min-height: 28px; padding: 0 10px;
+      cursor: pointer; font-weight: 800; font-size: 12px;
+    }
+    .config-ep-select-item:hover { background: var(--soft); color: var(--text); }
+    .config-ep-select-item.is-active { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .config-section-v2-placeholder { color: var(--muted); font-size: 12px; padding: 6px; }
   </style>
 </head>
 <body>
@@ -1704,7 +1720,7 @@ function renderAccounts() {
           <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
         </div>
       </td>
-    </tr>`).join('') || '<tr><td colspan="12" class="muted">暂无账号</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="11" class="muted">暂无账号</td></tr>';
   updateAccountSelectionUi(rows);
   _renderPager('accounts', total);
 }
@@ -3440,6 +3456,8 @@ let CONFIG_SMS_ACTIVE_SECTION = '通用接码';
 let CONFIG_CODEX_ACTIVE_SECTION = '基础配置';
 const CONFIG_PENDING_UPDATES = {};
 {% include "sms_tiger_catalog.js" %}
+let CONFIG_VAK_META = null;
+let CONFIG_VAK_META_LOADING = false;
 
 function configGroups() {
   const groups = {};
@@ -3451,7 +3469,14 @@ function renderConfigField(f) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   let html = `<label class="fld">${esc(f.label)}<span class="hint">${esc(f.help)} · <span class="mono">${esc(f.key)}</span></span>`;
   if (Array.isArray(f.choices) && f.choices.length) {
-    html += `<select data-key="${attrEsc(f.key)}">${f.choices.map(item => `<option value="${attrEsc(item.value)}"${String(fv) === String(item.value) ? ' selected' : ''}>${esc(item.label || item.value)}</option>`).join('')}</select>`;
+    const current = isPlaceholderEmpty(fv) ? '' : String(fv || '');
+    if (f.allow_custom) {
+      const listId = `cfg-legacy-list-${f.key}`;
+      html += `<input type="text" list="${attrEsc(listId)}" data-key="${attrEsc(f.key)}" value="${attrEsc(current)}" autocomplete="off" spellcheck="false">`;
+      html += `<datalist id="${attrEsc(listId)}">${f.choices.map(c => `<option value="${attrEsc(c.value)}">${esc(c.label || c.value)}</option>`).join('')}</datalist>`;
+    } else {
+      html += `<select data-key="${attrEsc(f.key)}">${f.choices.map(c => `<option value="${attrEsc(c.value)}"${String(c.value) === current ? ' selected' : ''}>${esc(c.label || c.value)}</option>`).join('')}</select>`;
+    }
   } else if (f.type === 'bool') {
     html += `<select data-key="${attrEsc(f.key)}"><option value="true"${fv?' selected':''}>开启 (True)</option><option value="false"${!fv?' selected':''}>关闭 (False)</option></select>`;
   } else if (f.type === 'int') {
@@ -3549,9 +3574,10 @@ function smsConfigSectionForKey(key) {
   if (['SMS_PROVIDER','SMS_COUNTRY','SMS_SERVICE','SMS_MAX_PRICE','SMS_MAX_RETRIES','SMS_CODE_WAIT'].includes(key)) {
     return ['通用接码', '接码通道选择、国家/服务代码、价格、等待和重试参数；SMSBower 的 OpenAI 服务代码为 dr，openai/chatgpt 会自动转换'];
   }
-  if (key === 'SMS_API_KEY') return ['GrizzlySMS', 'GrizzlySMS 平台 API Key 配置'];
+  if (key === 'SMS_API_KEY') return ['GrizzlySMS', 'GrizzlySMS 平台 API Key 配置；Vak 可回退使用'];
   if (key.startsWith('TIGER_SMS_')) return ['Tiger SMS', 'Tiger SMS API 地址与密钥配置；服务代码 dr，国家按平台国家表填写'];
   if (key.startsWith('SMSBOWER_')) return ['SMSBower', 'SMSBower handler_api、V2取号和供应商/价格筛选配置'];
+  if (key.startsWith('VAK_')) return ['Vak SMS', 'Vak SMS 官方 API 配置'];
   if (key.startsWith('H_')) return ['H 接码', 'H_API.md 本地 H 取号服务配置；项目ID/国家留空时复用通用字段'];
   if (key.startsWith('L_')) return ['L 接码', 'L_API.md 本地 L 取号服务配置'];
   return ['其他接码配置', ''];
@@ -3597,6 +3623,9 @@ function renderSectionedConfigFields(fields, activeSectionName, setActiveSection
   const current = bySection[activeSectionName];
   if (!current) return html;
   html += configSubhead(activeSectionName, current.help);
+  if (dataAttr === 'sms-config-section' && activeSectionName === 'Vak SMS') {
+    html += renderVakMetaTools();
+  }
   for (const f of current.fields) {
     html += renderConfigField(f);
     if (f.key === 'CLOUDMAIL_AUTH_TOKEN') html += renderCloudMailTokenTools();
@@ -3621,7 +3650,7 @@ function renderConfigFields(fields) {
       CONFIG_SMS_ACTIVE_SECTION,
       v => { CONFIG_SMS_ACTIVE_SECTION = v; },
       smsConfigSectionForKey,
-      ['通用接码', 'GrizzlySMS', 'SMSBower', 'Tiger SMS', 'H 接码', 'L 接码', '其他接码配置'],
+      ['通用接码', 'GrizzlySMS', 'SMSBower', 'Tiger SMS', 'Vak SMS', 'H 接码', 'L 接码', '其他接码配置'],
       'sms-config-section'
     );
   }
@@ -3636,6 +3665,103 @@ function renderConfigFields(fields) {
     );
   }
   return fields.map(renderConfigField).join('');
+}
+
+function renderVakMetaTools() {
+  const meta = CONFIG_VAK_META || {};
+  const loading = !!CONFIG_VAK_META_LOADING;
+  const status = meta.message
+    ? `✅ ${meta.message}`
+    : (loading ? '正在加载 Vak 国家与价格...' : '尚未加载 Vak 数据');
+  const service = String(Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'VAK_PRODUCT')
+    ? CONFIG_PENDING_UPDATES.VAK_PRODUCT
+    : (_configValue('VAK_PRODUCT') || 'dr')).trim() || 'dr';
+  const country = String(Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'VAK_COUNTRY')
+    ? CONFIG_PENDING_UPDATES.VAK_COUNTRY
+    : (_configValue('VAK_COUNTRY') || '')).trim();
+  const operator = String(Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'VAK_OPERATOR')
+    ? CONFIG_PENDING_UPDATES.VAK_OPERATOR
+    : (_configValue('VAK_OPERATOR') || 'any')).trim() || 'any';
+  const maxPrice = String(Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'VAK_MAX_PRICE')
+    ? CONFIG_PENDING_UPDATES.VAK_MAX_PRICE
+    : (_configValue('VAK_MAX_PRICE') || '0')).trim() || '0';
+  const services = Array.isArray(meta.services) && meta.services.length ? meta.services : [{ value: 'dr', label: 'OpenAI (dr)' }];
+  const countries = Array.isArray(meta.countries) ? [...meta.countries].sort((a, b) => {
+    const ap = Number(a.minPrice ?? 999999);
+    const bp = Number(b.minPrice ?? 999999);
+    if (ap !== bp) return ap - bp;
+    return Number(b.offerCount ?? b.totalCount ?? b.count ?? 0) - Number(a.offerCount ?? a.totalCount ?? a.count ?? 0);
+  }) : [];
+  const effectiveCountry = country || String(meta.selected_country?.value || countries[0]?.value || '').trim();
+  const selectedCountry = countries.find(c => String(c.value || '').toLowerCase() === effectiveCountry.toLowerCase()) || meta.selected_country || countries[0] || {};
+  const operatorsRaw = selectedCountry && selectedCountry.operators ? selectedCountry.operators : [];
+  const operators = ['any'];
+  if (Array.isArray(operatorsRaw)) {
+    operatorsRaw.forEach(x => {
+      const v = String(typeof x === 'string' ? x : (x && (x.name || x.value)) || '').trim();
+      if (v && !operators.includes(v)) operators.push(v);
+    });
+  } else if (operatorsRaw && typeof operatorsRaw === 'object') {
+    Object.keys(operatorsRaw).forEach(k => {
+      const v = String(k || '').trim();
+      if (v && !operators.includes(v)) operators.push(v);
+    });
+  }
+  const serviceOptions = services.length
+    ? services.map(s => `
+        <option value="${attrEsc(s.value)}"${String(s.value || '').toLowerCase() === service.toLowerCase() ? ' selected' : ''}>${esc(s.label || s.value)}</option>
+      `).join('')
+    : `<option value="dr" selected>OpenAI (dr)</option>`;
+  const countryOptions = countries.length
+    ? countries.map(c => {
+        const total = c.offerCount || c.totalCount || c.count || 0;
+        const minPrice = c.minPrice != null ? ` · 最低 ${c.minPrice}` : '';
+        const label = `${c.label || c.value}${total ? ` · 库存 ${total}` : ''}${minPrice}`;
+        return `<option value="${attrEsc(c.value)}"${String(c.value || '').toLowerCase() === effectiveCountry.toLowerCase() ? ' selected' : ''}>${esc(label)}</option>`;
+      }).join('')
+    : '<option value="">暂无国家候选</option>';
+  const operatorOptions = operators.map(v => `<option value="${attrEsc(v)}"${String(v).toLowerCase() === operator.toLowerCase() ? ' selected' : ''}>${esc(v === 'any' ? 'any（不限运营商）' : v)}</option>`).join('');
+  const prices = Array.isArray(selectedCountry.prices) ? selectedCountry.prices : (Array.isArray(meta.prices) ? meta.prices : []);
+  const priceOptions = prices.length
+    ? prices.map(p => `
+        <button type="button" class="config-ep-select-item${String(p.value) === maxPrice ? ' is-active' : ''}" role="option" data-vak-price-value="${attrEsc(p.value)}">${esc(p.label || p.value)}</button>
+      `).join('')
+    : '<div class="config-section-v2-placeholder">暂无价格档位</div>';
+  return `
+    <div class="roxy-workspace-box" style="margin-top:18px;">
+      <div>
+        <b>Vak 号码选择</b>
+      </div>
+      <div class="row" style="align-items:flex-start;gap:12px;">
+        <div style="min-width:0;flex:1;display:grid;gap:10px;">
+          <label class="fld">项目 / 服务
+            <select id="vakServiceSelect" data-vak-service-select>
+              ${serviceOptions}
+            </select>
+          </label>
+          <label class="fld">支持国家
+            <select id="vakCountrySelect" data-vak-country-select>
+              ${countryOptions}
+            </select>
+          </label>
+          <label class="fld">运营商
+            <select id="vakOperatorSelect" data-vak-op-select>
+              ${operatorOptions}
+            </select>
+          </label>
+          <div class="hint">最高价格</div>
+          <div class="config-ep-select open" id="vakPriceSelect">
+            <button type="button" class="config-ep-select-btn" data-ep-toggle="vakPriceSelect">${esc(maxPrice)}</button>
+            <div class="config-ep-select-menu" role="listbox">${priceOptions}</div>
+          </div>
+        </div>
+        <div class="action-cell">
+          <button class="btn" type="button" id="btnLoadVakMeta">刷新 Vak 国家/价格</button>
+        </div>
+      </div>
+      <div id="vakMetaStatus" class="muted" style="font-size:12px;">${esc(status)}</div>
+    </div>
+  `;
 }
 
 function renderConfigTabs() {
@@ -3787,6 +3913,7 @@ function renderConfigPanel() {
   `;
   bindRoxyWorkspaceTools();
   if (typeof mountTigerCatalog === 'function') mountTigerCatalog();
+  if (CONFIG_ACTIVE_GROUP === '接码平台' && CONFIG_SMS_ACTIVE_SECTION === 'Vak SMS') bindVakMetaTools();
 }
 
 async function loadConfig() {
@@ -3794,9 +3921,78 @@ async function loadConfig() {
     CONFIG = await api('/api/config');
     renderConfigTabs();
     renderConfigPanel();
+    if (_configValue('VAK_API_KEY') || String(_configValue('SMS_PROVIDER')).trim().toLowerCase() === 'vak') {
+      await loadVakMeta();
+    }
   } catch(e) {
     $('#configTabs').innerHTML = '';
     $('#configForm').innerHTML = `<div class="banner warn">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadVakMeta() {
+  const status = $('#vakMetaStatus');
+  const btn = $('#btnLoadVakMeta');
+  CONFIG_VAK_META_LOADING = true;
+  if (btn) btn.disabled = true;
+  if (status) status.textContent = '正在加载 Vak 国家与价格...';
+  try {
+    const service = String(Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'VAK_PRODUCT')
+      ? CONFIG_PENDING_UPDATES.VAK_PRODUCT
+      : (_configValue('VAK_PRODUCT') || 'dr')).trim() || 'dr';
+    const country = String(Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, 'VAK_COUNTRY')
+      ? CONFIG_PENDING_UPDATES.VAK_COUNTRY
+      : (_configValue('VAK_COUNTRY') || '')).trim();
+    const r = await api(`/api/vak/meta?service=${encodeURIComponent(service)}${country ? `&country=${encodeURIComponent(country)}` : ''}`);
+    CONFIG_VAK_META = r || {};
+    if (CONFIG_ACTIVE_GROUP === '接码平台') renderConfigPanel();
+  } catch(e) {
+    CONFIG_VAK_META = { countries: [], prices: [], message: `Vak 加载失败：${e.message}` };
+    if (status) status.textContent = CONFIG_VAK_META.message;
+  } finally {
+    CONFIG_VAK_META_LOADING = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+function bindVakMetaTools() {
+  const loadBtn = $('#btnLoadVakMeta');
+  const serviceSelect = $('#vakServiceSelect');
+  const countrySelect = $('#vakCountrySelect');
+  const opSelect = $('#vakOperatorSelect');
+  if (loadBtn && !loadBtn.dataset.bound) {
+    loadBtn.dataset.bound = '1';
+    loadBtn.addEventListener('click', () => loadVakMeta());
+  }
+  if (serviceSelect && !serviceSelect.dataset.bound) {
+    serviceSelect.dataset.bound = '1';
+    serviceSelect.addEventListener('change', (e) => {
+      CONFIG_PENDING_UPDATES.VAK_PRODUCT = e.target.value || 'dr';
+      CONFIG_PENDING_UPDATES.VAK_COUNTRY = '';
+      CONFIG_PENDING_UPDATES.VAK_OPERATOR = 'any';
+      CONFIG_PENDING_UPDATES.VAK_MAX_PRICE = '0';
+      loadVakMeta();
+    });
+  }
+  if (countrySelect && !countrySelect.dataset.bound) {
+    countrySelect.dataset.bound = '1';
+    countrySelect.addEventListener('change', (e) => {
+      const val = e.target.value || '';
+      CONFIG_PENDING_UPDATES.VAK_COUNTRY = val;
+      CONFIG_PENDING_UPDATES.VAK_OPERATOR = 'any';
+      const meta = CONFIG_VAK_META || {};
+      const row = (Array.isArray(meta.countries) ? meta.countries : []).find(c => String(c.value || '').toLowerCase() === String(val).toLowerCase());
+      const prices = row && Array.isArray(row.prices) ? row.prices : [];
+      CONFIG_PENDING_UPDATES.VAK_MAX_PRICE = prices.length ? String(prices[0].value || prices[0].price || '0') : '0';
+      renderConfigPanel();
+    });
+  }
+  if (opSelect && !opSelect.dataset.bound) {
+    opSelect.dataset.bound = '1';
+    opSelect.addEventListener('change', (e) => {
+      CONFIG_PENDING_UPDATES.VAK_OPERATOR = e.target.value || 'any';
+      renderConfigPanel();
+    });
   }
 }
 
@@ -3812,6 +4008,24 @@ $('#configForm').addEventListener('click', (e) => {
   const emailBtn = e.target.closest('[data-email-config-section]');
   if (emailBtn) {
     CONFIG_EMAIL_ACTIVE_SECTION = emailBtn.dataset.emailConfigSection;
+    renderConfigPanel();
+    return;
+  }
+  const vakCountryBtn = e.target.closest('[data-vak-country-value]');
+  if (vakCountryBtn) {
+    CONFIG_PENDING_UPDATES.VAK_COUNTRY = vakCountryBtn.dataset.vakCountryValue;
+    renderConfigPanel();
+    return;
+  }
+  const vakPriceBtn = e.target.closest('[data-vak-price-value]');
+  if (vakPriceBtn) {
+    const serviceSel = $('#vakServiceSelect');
+    const countrySel = $('#vakCountrySelect');
+    const opSel = $('#vakOperatorSelect');
+    if (serviceSel && serviceSel.value) CONFIG_PENDING_UPDATES.VAK_PRODUCT = serviceSel.value;
+    if (countrySel && countrySel.value) CONFIG_PENDING_UPDATES.VAK_COUNTRY = countrySel.value;
+    if (opSel && opSel.value) CONFIG_PENDING_UPDATES.VAK_OPERATOR = opSel.value;
+    CONFIG_PENDING_UPDATES.VAK_MAX_PRICE = vakPriceBtn.dataset.vakPriceValue;
     renderConfigPanel();
     return;
   }
@@ -3901,22 +4115,7 @@ function readConfigElementValue(el, f) {
   return isPlaceholderEmpty(el.value) ? '' : el.value.trim();
 }
 
-$('#configForm').addEventListener('input', (e) => {
-  const el = e.target.closest('[data-key]');
-  if (!el) return;
-  const f = CONFIG.find(x => x.key === el.dataset.key);
-  if (!f) return;
-  CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
-});
-$('#configForm').addEventListener('change', (e) => {
-  const el = e.target.closest('[data-key]');
-  if (!el) return;
-  const f = CONFIG.find(x => x.key === el.dataset.key);
-  if (!f) return;
-  CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
-});
-
-$('#btnSaveConfig').addEventListener('click', async () => {
+async function saveConfig() {
   const updates = {...CONFIG_PENDING_UPDATES};
   $$('#tab-config [data-key]').forEach(el => {
     const f = CONFIG.find(x => x.key === el.dataset.key);
@@ -3935,9 +4134,31 @@ $('#btnSaveConfig').addEventListener('click', async () => {
     }
     for (const [k, v] of Object.entries(updates)) { const f = CONFIG.find(x => x.key === k); if (f) f.value = v; delete CONFIG_PENDING_UPDATES[k]; }
     showToast(r.reloaded ? '配置已生效' : '配置已保存（需重启）');
-  } catch(e) { showToast('保存失败: ' + e.message); }
-  finally { $('#btnSaveConfig').disabled = false; }
+    return r;
+  } catch(e) {
+    showToast('保存失败: ' + e.message);
+    throw e;
+  } finally {
+    $('#btnSaveConfig').disabled = false;
+  }
+}
+
+$('#configForm').addEventListener('input', (e) => {
+  const el = e.target.closest('[data-key]');
+  if (!el) return;
+  const f = CONFIG.find(x => x.key === el.dataset.key);
+  if (!f) return;
+  CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
 });
+$('#configForm').addEventListener('change', (e) => {
+  const el = e.target.closest('[data-key]');
+  if (!el) return;
+  const f = CONFIG.find(x => x.key === el.dataset.key);
+  if (!f) return;
+  CONFIG_PENDING_UPDATES[f.key] = readConfigElementValue(el, f);
+});
+
+$('#btnSaveConfig').addEventListener('click', () => saveConfig().catch(() => {}));
 
 // ---------- 全局复制委托 ----------
 document.addEventListener('click', (e) => {

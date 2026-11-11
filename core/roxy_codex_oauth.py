@@ -675,7 +675,9 @@ def _phone_page_state(driver) -> dict:
     try:
         return driver.execute_script(r"""
         const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-        const radios = [...document.querySelectorAll('input[type=radio]')].filter(visible).map(el => ({
+        // React-Aria segmented-control 的 radio input 可能是视觉隐藏的；不能按 visible 过滤，
+        // 否则会误以为页面没有 SMS/WhatsApp radio。
+        const radios = [...document.querySelectorAll('input[type=radio]')].map(el => ({
           name: el.name || '', value: el.value || '', checked: !!el.checked, id: el.id || ''
         }));
         const inputs = [...document.querySelectorAll('input,select,textarea')].filter(visible).map(el => ({
@@ -699,18 +701,55 @@ def _select_sms_channel_or_raise(driver) -> None:
     has_sms = any(str(r.get('value','')).lower() in ('sms', 'text', 'text_message', 'text-message') for r in radios)
     if has_whatsapp and not has_sms:
         raise RuntimeError(f"whatsapp_channel: 页面仅提供 WhatsApp 通道 state={state}")
-    # 选择 SMS/text radio。无 radio 时可能默认 SMS。
+    # 选择 SMS/text radio。不能只 sms.click()：React-Aria 的分段控件里 radio 可能是
+    # 视觉隐藏的，直接点 input 偶发不改变真实 React 状态，最终仍按 WhatsApp 发送。
     selected = driver.execute_script(r"""
-    const radios = [...document.querySelectorAll('input[type=radio]')];
-    const sms = radios.find(el => /^(sms|text|text_message|text-message)$/i.test(el.value || ''));
-    if (!sms) return false;
-    sms.click();
-    sms.dispatchEvent(new Event('input', {bubbles:true}));
-    sms.dispatchEvent(new Event('change', {bubbles:true}));
-    return true;
+    const form = document.querySelector('form[action*="/add-phone" i]')
+      || [...document.querySelectorAll('form')].find(f => /add-phone/i.test(f.getAttribute('action') || ''))
+      || document;
+    const radios = [...form.querySelectorAll('input[type=radio]')];
+    const norm = v => String(v || '').toLowerCase().replace(/[\s_-]+/g, '');
+    const sms = radios.find(el => ['sms','text','textmessage'].includes(norm(el.value)));
+    const wa = radios.find(el => norm(el.value).includes('whatsapp'));
+    const hiddenChannel = form.querySelector('input[name="channel"]');
+    if (!sms && hiddenChannel) {
+      hiddenChannel.value = 'sms';
+      hiddenChannel.dispatchEvent(new Event('input', {bubbles:true}));
+      hiddenChannel.dispatchEvent(new Event('change', {bubbles:true}));
+      return {ok:true, method:'hidden-only', channel:hiddenChannel.value};
+    }
+    if (!sms) return {ok:false, reason:'sms_radio_missing'};
+
+    const setChecked = (el, checked) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked')?.set;
+      if (setter) setter.call(el, checked); else el.checked = checked;
+      el.dispatchEvent(new Event('input', {bubbles:true}));
+      el.dispatchEvent(new Event('change', {bubbles:true}));
+    };
+
+    // 先点 label，让 React-Aria 正常更新 thumb/data-state。
+    const label = sms.closest('label');
+    if (label) label.click(); else sms.click();
+    setChecked(sms, true);
+    if (wa) setChecked(wa, false);
+    if (hiddenChannel) {
+      hiddenChannel.value = 'sms';
+      hiddenChannel.dispatchEvent(new Event('input', {bubbles:true}));
+      hiddenChannel.dispatchEvent(new Event('change', {bubbles:true}));
+    }
+    document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', code:'Escape', bubbles:true}));
+    return {
+      ok: !!sms.checked && (!wa || !wa.checked) && (!hiddenChannel || String(hiddenChannel.value || '').toLowerCase() === 'sms'),
+      method: label ? 'label+native' : 'input+native',
+      smsChecked: !!sms.checked,
+      waChecked: wa ? !!wa.checked : null,
+      channel: hiddenChannel ? hiddenChannel.value : ''
+    };
     """)
-    if selected:
-        logger.info("[Codex][Browser] 已选择 SMS 短信通道")
+    if selected and selected.get("ok"):
+        logger.info("[Codex][Browser] 已选择 SMS 短信通道：%s", selected)
+        return
+    raise RuntimeError(f"sms_channel_select_failed: result={selected} state={_phone_page_state(driver)}")
 
 
 def _is_phone_code_state(state: dict) -> bool:
@@ -785,6 +824,73 @@ def _auth_origin(driver) -> str:
     return "https://auth.openai.com"
 
 
+def _dismiss_phone_country_dropdown(driver) -> None:
+    """关闭国家码下拉/移开焦点，避免遮挡 Continue 或吞掉点击。"""
+    try:
+        from selenium.webdriver.common.keys import Keys
+        active = driver.switch_to.active_element
+        try:
+            active.send_keys(Keys.ESCAPE)
+            time.sleep(0.12)
+            active.send_keys(Keys.TAB)
+            time.sleep(0.12)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        driver.execute_script(r"""
+        const active = document.activeElement;
+        if (active && typeof active.blur === 'function') active.blur();
+        document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', code:'Escape', bubbles:true}));
+        document.body?.click?.();
+        document.body?.focus?.();
+        """)
+    except Exception:
+        pass
+
+
+def _clear_phone_inputs(driver) -> None:
+    """清理手机号相关输入，避免换号时旧值/React 内部状态残留。"""
+    try:
+        driver.execute_script(r"""
+        const inputs = [...document.querySelectorAll('input')];
+        for (const el of inputs) {
+          const hay = [el.type, el.name, el.id, el.autocomplete, el.placeholder, el.getAttribute('aria-label')]
+            .join(' ').toLowerCase();
+          if (/(phone|tel|mobile|sms|手机号|手机|電話|携帯)/i.test(hay) || (el.type || '').toLowerCase() === 'tel') {
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+            if (setter) setter.call(el, ''); else el.value = '';
+            el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'deleteContentBackward', data:null}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+          }
+        }
+        """)
+    except Exception:
+        pass
+
+
+def _try_click_change_phone(driver) -> bool:
+    """验证码页换号时优先点击 Change/Edit/Back，保留 auth transaction。"""
+    try:
+        clicked = driver.execute_script(r"""
+        const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+        const candidates = [...document.querySelectorAll('button,a,[role="button"]')].filter(visible);
+        const re = /(change|edit|back|phone|電話番号を変更|変更|戻る|更改|返回|뒤로|변경|전화번호 변경)/i;
+        const target = candidates.find(el => re.test([el.innerText, el.textContent, el.value, el.getAttribute('aria-label')].join(' ')));
+        if (!target) return false;
+        target.scrollIntoView({block:'center'});
+        target.click();
+        return true;
+        """)
+        if clicked:
+            human_delay("click")
+            return _has_strict_add_phone_form(driver)
+    except Exception:
+        pass
+    return False
+
+
 def _ensure_add_phone_input(driver, *, reason: str = ""):
     """确保当前页面回到 add-phone，并返回手机号输入框。
 
@@ -802,6 +908,20 @@ def _ensure_add_phone_input(driver, *, reason: str = ""):
             return _find_any(driver, _PHONE_INPUT_SELECTORS, timeout=2)
         current = str(getattr(driver, "current_url", "") or "")
 
+    # 如果已经在验证码页，优先用页面上的 Change/Back 或浏览器后退回表单；
+    # 比直接打开 /add-phone 更稳定，也更接近 BrowserUse 的逻辑。
+    if _is_phone_code_page(driver):
+        logger.info("[Codex][Browser] 当前在手机验证码页，优先返回手机号输入页：reason=%s", reason or "retry")
+        if _try_click_change_phone(driver):
+            return _find_any(driver, _PHONE_INPUT_SELECTORS, timeout=5)
+        try:
+            driver.back()
+            human_delay("navigate")
+            if _has_strict_add_phone_form(driver):
+                return _find_any(driver, _PHONE_INPUT_SELECTORS, timeout=5)
+        except Exception:
+            pass
+
     target = _auth_origin(driver).rstrip("/") + "/add-phone"
     logger.info(
         "[Codex][Browser] 当前不在手机号输入页，准备重新打开 add-phone 后换号：reason=%s url=%s target=%s",
@@ -810,7 +930,13 @@ def _ensure_add_phone_input(driver, *, reason: str = ""):
     try:
         driver.get(target)
         human_delay("navigate")
-        return _find_any(driver, _PHONE_INPUT_SELECTORS, timeout=10)
+        try:
+            return _find_any(driver, _PHONE_INPUT_SELECTORS, timeout=10)
+        except Exception:
+            # Roxy 偶发打开 add-phone 后 body 短暂空白，reload 一次。
+            driver.refresh()
+            human_delay("navigate")
+            return _find_any(driver, _PHONE_INPUT_SELECTORS, timeout=8)
     except Exception as first_exc:
         # 某些流程不允许直接打开 /add-phone，尝试浏览器返回到上一页。
         logger.info("[Codex][Browser] 直接打开 add-phone 未拿到输入框，尝试 history back：%s", str(first_exc)[:160])
@@ -857,6 +983,22 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10) -> dict:
     let dialCode = '';
     let selectedText = '';
     let selectedChanged = false;
+    // 页面隐藏 select 的 option 文案在日文环境下只有国家名，通常不带 (+55) 之类区号。
+    // 所以不能只从 option.textContent 解析区号；这里用常见 ISO->区号表按 E.164 前缀反推国家。
+    const dialToIso = {
+      '1':'US','7':'RU','20':'EG','27':'ZA','30':'GR','31':'NL','32':'BE','33':'FR','34':'ES','36':'HU','39':'IT',
+      '40':'RO','41':'CH','43':'AT','44':'GB','45':'DK','46':'SE','47':'NO','48':'PL','49':'DE',
+      '51':'PE','52':'MX','53':'CU','54':'AR','55':'BR','56':'CL','57':'CO','58':'VE',
+      '60':'MY','61':'AU','62':'ID','63':'PH','64':'NZ','65':'SG','66':'TH',
+      '81':'JP','82':'KR','84':'VN','86':'CN','90':'TR','91':'IN','92':'PK','93':'AF','94':'LK','95':'MM','98':'IR',
+      '212':'MA','213':'DZ','216':'TN','218':'LY','234':'NG','254':'KE','255':'TZ','256':'UG','380':'UA',
+      '351':'PT','352':'LU','353':'IE','354':'IS','355':'AL','356':'MT','357':'CY','358':'FI','359':'BG',
+      '370':'LT','371':'LV','372':'EE','374':'AM','375':'BY','376':'AD','377':'MC','381':'RS','382':'ME',
+      '385':'HR','386':'SI','387':'BA','389':'MK','420':'CZ','421':'SK','852':'HK','853':'MO','886':'TW',
+      '971':'AE','972':'IL','974':'QA','966':'SA'
+    };
+    const matchedDial = Object.keys(dialToIso).sort((a,b) => b.length - a.length).find(code => digits.startsWith(code)) || '';
+    const matchedIso = matchedDial ? dialToIso[matchedDial] : '';
     const optionDialCode = (opt) => {
       const text = String(opt?.textContent || opt?.label || opt?.value || '').replace(/\s+/g, ' ').trim();
       const m = text.match(/\+(\d{1,4})\b/);
@@ -865,30 +1007,30 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10) -> dict:
     if (select) {
       // 参考 FlowPilot ensureCountrySelected：按号码前缀选择对应国家/区号，避免默认国家与号码不一致。
       const options = [...select.options];
-      const matched = options
+      let matched = options.find(opt => matchedIso && String(opt.value || '').toUpperCase() === matchedIso);
+      if (!matched) matched = options
         .map(opt => ({opt, code: optionDialCode(opt)}))
         .filter(x => x.code && digits.startsWith(x.code))
-        .sort((a, b) => b.code.length - a.code.length)[0];
-      if (matched && select.value !== matched.opt.value) {
-        select.value = matched.opt.value;
-        select.dispatchEvent(new Event('input', {bubbles:true}));
+        .sort((a, b) => b.code.length - a.code.length)[0]?.opt;
+      if (matched && select.value !== matched.value) {
+        const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+        if (selectSetter) selectSetter.call(select, matched.value); else select.value = matched.value;
+        select.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertReplacementText', data: matched.value}));
         select.dispatchEvent(new Event('change', {bubbles:true}));
         selectedChanged = true;
       }
       if (select.selectedIndex >= 0 && select.options[select.selectedIndex]) {
         const opt = select.options[select.selectedIndex];
         selectedText = String(opt.textContent || opt.label || opt.value || '').replace(/\s+/g, ' ').trim();
-        dialCode = optionDialCode(opt);
+        dialCode = optionDialCode(opt) || matchedDial;
       }
     }
+    if (!dialCode) dialCode = matchedDial;
 
-    // FlowPilot：可见框一般填 national number；隐藏 phoneNumber 填完整 E.164。
-    // 若无法判断页面区号，则可见框填完整 +E164，避免丢国家码。
+    // 可见框直接填完整 +E.164。
+    // 之前填 national number 时，BR 会被组件格式化成 "(88) 95157-7449"；
+    // 手工输入 +5588951577449 不会出现括号，因此这里保持和手工输入一致。
     let visibleValue = e164;
-    if (dialCode && digits.startsWith(dialCode) && digits.length > dialCode.length + 3) {
-      visibleValue = digits.slice(dialCode.length);
-      if (!visibleValue) visibleValue = e164;
-    }
 
     const setNativeValue = (el, value) => {
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -911,6 +1053,7 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10) -> dict:
     }
     phoneInput.blur();
     document.body?.focus?.();
+    document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', code:'Escape', bubbles:true}));
     return {
       ok: true,
       e164,
@@ -937,6 +1080,9 @@ def _set_phone_value(driver, phone: str, *, timeout: int = 10) -> dict:
     visible_digits = ''.join(ch for ch in visible_value if ch.isdigit())
     e164_digits = ''.join(ch for ch in e164 if ch.isdigit())
     hidden_digits = ''.join(ch for ch in hidden_value if ch.isdigit())
+    # 国家已正确选择时，可见框会只保留 national number（例如 BR: +5551926346338
+    # 显示为 51 92634 6338）；未正确选择/无法判断时可能显示完整 +E.164。
+    # 既接受“完整号码”，也接受“完整号码去掉当前 dialCode 后的 national 部分”。
     expected_visible_ok = bool(actual_digits) and (actual_digits == visible_digits or actual_digits == e164_digits)
     if not expected_visible_ok:
         raise RuntimeError(f"手机号可见输入框校验失败 expected_digits={visible_digits or e164_digits} actual={actual} result={result} state={_phone_page_state(driver)}")
@@ -951,6 +1097,7 @@ def _blur_active_input_and_wait(driver, *, label: str = "输入完成") -> None:
         driver.execute_script(r"""
         const active = document.activeElement;
         if (active && typeof active.blur === 'function') active.blur();
+        document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', code:'Escape', bubbles:true}));
         document.body?.focus?.();
         document.dispatchEvent(new Event('change', {bubbles:true}));
         """)
@@ -976,12 +1123,64 @@ def _verify_add_phone_value_before_submit(driver, expected_e164: str) -> dict:
     const visibleDigits = digits(visibleValue);
     const hiddenDigits = digits(hiddenValue);
     const expectedDigits = digits(expected);
-    // 输入框可能被自动格式化，按数字比较；隐藏字段如果存在必须等于完整 E.164。
-    const ok = !!visibleDigits && visibleDigits === expectedDigits && (!hidden || hiddenDigits === expectedDigits);
-    return {ok, visibleValue, hiddenValue, expected, visibleDigits, hiddenDigits, expectedDigits, url: location.href};
+    const dialCodes = ['971','972','974','966','852','853','886','420','421','380','389','387','386','385','382','381','376','377','375','374','372','371','370','359','358','357','356','355','354','353','352','351','254','255','256','234','218','216','213','212','98','95','94','93','92','91','90','86','84','82','81','66','65','64','63','62','61','60','58','57','56','55','54','53','52','51','49','48','47','46','45','44','43','41','40','39','36','34','33','32','31','30','27','20','7','1'];
+    const dialCode = dialCodes.find(code => expectedDigits.startsWith(code)) || '';
+    const expectedNationalDigits = dialCode ? expectedDigits.slice(dialCode.length) : '';
+    // 输入框可能被自动格式化：接受完整 E.164 数字，或国家码选择正确后的 national number。
+    // 隐藏字段如果存在，必须等于完整 E.164。
+    const visibleOk = !!visibleDigits && (visibleDigits === expectedDigits || (!!expectedNationalDigits && visibleDigits === expectedNationalDigits));
+    const ok = visibleOk && (!hidden || hiddenDigits === expectedDigits);
+    return {ok, visibleValue, hiddenValue, expected, visibleDigits, hiddenDigits, expectedDigits, expectedNationalDigits, dialCode, url: location.href};
     """, expected_e164)
     if not result or not result.get("ok"):
         raise RuntimeError(f"手机号提交前校验失败 result={result} state={_phone_page_state(driver)}")
+    return result
+
+
+def _verify_sms_channel_before_submit(driver) -> dict:
+    """提交 add-phone 前二次确认通道仍是 SMS，防止 React 状态回弹到 WhatsApp。"""
+    result = driver.execute_script(r"""
+    const form = document.querySelector('form[action*="/add-phone" i]')
+      || [...document.querySelectorAll('form')].find(f => /add-phone/i.test(f.getAttribute('action') || ''))
+      || document;
+    const radios = [...form.querySelectorAll('input[type=radio]')];
+    const norm = v => String(v || '').toLowerCase().replace(/[\s_-]+/g, '');
+    const sms = radios.find(el => ['sms','text','textmessage'].includes(norm(el.value)));
+    const wa = radios.find(el => norm(el.value).includes('whatsapp'));
+    const hiddenChannel = form.querySelector('input[name="channel"]');
+
+    const setChecked = (el, checked) => {
+      if (!el) return;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked')?.set;
+      if (setter) setter.call(el, checked); else el.checked = checked;
+      el.dispatchEvent(new Event('input', {bubbles:true}));
+      el.dispatchEvent(new Event('change', {bubbles:true}));
+    };
+
+    if (sms && !sms.checked) {
+      const label = sms.closest('label');
+      if (label) label.click(); else sms.click();
+      setChecked(sms, true);
+    }
+    if (wa && wa.checked) setChecked(wa, false);
+    if (hiddenChannel && String(hiddenChannel.value || '').toLowerCase() !== 'sms') {
+      hiddenChannel.value = 'sms';
+      hiddenChannel.dispatchEvent(new Event('input', {bubbles:true}));
+      hiddenChannel.dispatchEvent(new Event('change', {bubbles:true}));
+    }
+    const ok = (!sms || sms.checked) && (!wa || !wa.checked) && (!hiddenChannel || String(hiddenChannel.value || '').toLowerCase() === 'sms');
+    return {
+      ok,
+      smsExists: !!sms,
+      smsChecked: sms ? !!sms.checked : null,
+      waExists: !!wa,
+      waChecked: wa ? !!wa.checked : null,
+      channel: hiddenChannel ? hiddenChannel.value : '',
+      url: location.href
+    };
+    """)
+    if not result or not result.get("ok"):
+        raise RuntimeError(f"sms_channel_verify_failed: result={result} state={_phone_page_state(driver)}")
     return result
 
 
@@ -1019,6 +1218,7 @@ def _click_add_phone_continue_button(driver, *, timeout: int = 10) -> dict:
     参考 FlowPilot 的 getAddPhoneSubmitButton + simulateClick：优先在 add-phone form 内找
     enabled submit，点击失败时用 form.requestSubmit(button) 兜底。
     """
+    _dismiss_phone_country_dropdown(driver)
     end = time.time() + timeout
     last = None
     while time.time() < end:
@@ -1078,6 +1278,7 @@ def _click_add_phone_continue_button(driver, *, timeout: int = 10) -> dict:
 def _force_submit_add_phone_form(driver) -> dict:
     """add-phone 页面点击按钮没生效时，直接 requestSubmit 当前 form。"""
     try:
+        _dismiss_phone_country_dropdown(driver)
         return driver.execute_script(r"""
         const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
         const form = document.querySelector('form[action*="/add-phone" i]')
@@ -1099,13 +1300,15 @@ def _force_submit_add_phone_form(driver) -> dict:
 def _wait_after_phone_send(driver, timeout: int = 12) -> str:
     end = time.time() + timeout
     last = {}
-    force_submitted = False
     while time.time() < end:
         time.sleep(1)
         last = _phone_page_state(driver)
         # 必须优先判断验证码页：页面文案里可能包含 send/limit/check 等词，不能把
         # “Check your phone / Enter the verification code...” 误判成发送失败。
         if _is_phone_code_state(last):
+            body_lower = str(last.get('bodyText') or '').lower()
+            if 'whatsapp' in body_lower or 'whats app' in body_lower:
+                raise RuntimeError(f"whatsapp_channel: 已进入 WhatsApp 验证码页 body={(last.get('bodyText') or '')[:240]}")
             return 'code_page'
         body = str(last.get('bodyText') or '')
         reason = _classify_phone_page_failure(last)
@@ -1116,12 +1319,9 @@ def _wait_after_phone_send(driver, timeout: int = 12) -> str:
             invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
             if invalid:
                 raise RuntimeError(f"invalid_phone: add-phone input aria-invalid state={last}")
-            # Cloak/React-Aria 场景下 btn.click 可能只聚焦没触发表单提交；补一次 requestSubmit。
-            if not force_submitted and time.time() > end - timeout + 3:
-                info = _force_submit_add_phone_form(driver)
-                logger.info("[Codex][Browser] add-phone 点击后仍停留本页，补执行 form.requestSubmit：%s", info)
-                force_submitted = True
-                time.sleep(2)
+            # 不在这里自动补 requestSubmit。日志显示二次 requestSubmit 容易在 React 状态未稳定时
+            # 把 channel 打成 WhatsApp，且后续回退可能触发 invalid_auth_step。
+            # 只等待；超时后由外层换号/恢复页面。
     if _is_phone_code_state(last) or _is_phone_code_page(driver):
         return 'code_page'
     if _is_add_phone_page(driver):
@@ -1179,13 +1379,15 @@ def _classify_phone_page_failure(state: dict) -> str:
         return ''
     # WhatsApp 用 DOM radio value 判断；其它发送失败用服务端/页面错误文本兜底。
     radios = state.get('radios') or []
-    if any('whatsapp' in str(r.get('value','')).lower().replace(' ', '') and r.get('checked') for r in radios):
+    has_sms = any(str(r.get('value','')).lower() in ('sms', 'text', 'text_message', 'text-message') for r in radios)
+    whatsapp_checked = any('whatsapp' in str(r.get('value','')).lower().replace(' ', '') and r.get('checked') for r in radios)
+    if whatsapp_checked and not has_sms:
         return 'whatsapp_channel'
     text = str(state.get('bodyText') or '').lower()
     if 'invalid_auth_step' in text or 'invalid auth step' in text:
         return 'invalid_auth_step'
-    if 'whatsapp' in text or 'whats app' in text:
-        return 'whatsapp_channel'
+    # add-phone 页面会同时显示 SMS / WhatsApp 两个通道，bodyText 里出现 WhatsApp
+    # 不代表当前走的是 WhatsApp。不能仅凭文案换号，否则会在可提交页面误判。
     if any(k in text for k in ('invalid phone', 'not a valid phone', 'phone number is not valid', '号码无效', '手机号无效')):
         return 'invalid_phone'
     if any(k in text for k in (
@@ -1215,7 +1417,8 @@ def _do_phone_verification_if_present(driver) -> None:
     try:
         # 如果页面没有手机号输入框，直接返回。
         try:
-            end_detect = time.time() + 8
+            # 对齐 BrowserUse：邮箱 OTP 后跳手机号页可能较慢，给 20 秒观察窗口。
+            end_detect = time.time() + 20
             while time.time() < end_detect and not _has_strict_add_phone_form(driver):
                 # 如果已经在验证码页，说明手机步骤之前已提交过；继续处理验证码页，不应当跳过。
                 if _is_phone_code_page(driver):
@@ -1231,10 +1434,14 @@ def _do_phone_verification_if_present(driver) -> None:
         for attempt in range(1, max_retries + 1):
             activation_id = None
             try:
-                activation_id, phone = sms_provider.acquire_number(http)
-                logger.info("[Codex][Browser] 手机验证尝试 %s/%s，provider=%s，号码=+%s", attempt, max_retries, provider, phone)
+                # 先确认/恢复到手机号输入页，再取号；避免页面还在验证码页或空白页时浪费号码。
                 logger.info("[Codex][Browser] 准备手机号输入页，重新设置新手机号")
                 _ensure_add_phone_input(driver, reason=f"attempt-{attempt}")
+                _dismiss_phone_country_dropdown(driver)
+                _clear_phone_inputs(driver)
+
+                activation_id, phone = sms_provider.acquire_number(http)
+                logger.info("[Codex][Browser] 手机验证尝试 %s/%s，provider=%s，号码=+%s", attempt, max_retries, provider, phone)
                 phone_fill = _set_phone_value(driver, f"+{phone}", timeout=10)
                 logger.info(
                     "[Codex][Browser] 已重新设置手机号：e164=%s visible=%s hidden=%s dialCode=%s country=%s",
@@ -1247,12 +1454,13 @@ def _do_phone_verification_if_present(driver) -> None:
                 logger.info("[Codex][Browser] 检查并选择 SMS 短信通道")
                 _select_sms_channel_or_raise(driver)
                 _blur_active_input_and_wait(driver, label="短信通道确认完成")
+                channel_verify = _verify_sms_channel_before_submit(driver)
+                logger.info("[Codex][Browser] 手机号提交前短信通道校验通过：%s", channel_verify)
                 submit_info = _click_add_phone_continue_button(driver, timeout=10)
                 logger.info("[Codex][Browser] 已点击手机号 Continue/続行 按钮：%s，等待进入短信验证码页", submit_info)
-                _wait_page_settle_after_submit()
 
                 # 等待页面进入 phone-verification；若号码无效/无法发送/WhatsApp 通道，立即换号。
-                _wait_after_phone_send(driver, timeout=15)
+                _wait_after_phone_send(driver, timeout=22)
                 logger.info("[Codex][Browser] 已进入手机验证码页")
 
                 sms_provider.set_status(activation_id, 1, http=http)
@@ -1309,7 +1517,17 @@ def _do_phone_verification_if_present(driver) -> None:
                         logger.info("[Codex][Browser] 手机输入页已消失，继续后续流程")
                         return
                 if attempt < max_retries:
-                    _refresh_add_phone_for_retry(driver, reason=str(exc)[:120])
+                    if _is_phone_code_page(driver):
+                        # 关键：验证码页不要 refresh。刷新/直接开 add-phone 容易破坏 auth step，
+                        # 下一次提交出现 invalid_auth_step。优先走 Change/Back 保留事务。
+                        try:
+                            _ensure_add_phone_input(driver, reason=f"after-code-fail-{attempt}")
+                        except Exception as back_exc:
+                            logger.info("[Codex][Browser] 从验证码页返回手机号页失败，下一轮会再次尝试：%s", str(back_exc)[:180])
+                    else:
+                        _refresh_add_phone_for_retry(driver, reason=str(exc)[:120])
+                    _dismiss_phone_country_dropdown(driver)
+                    _clear_phone_inputs(driver)
                 _sleep_before_phone_retry(attempt, max_retries)
         raise RuntimeError(f"Roxy 手机验证重试 {max_retries} 次仍失败，最后错误：{last_err}")
     finally:

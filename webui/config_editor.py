@@ -853,7 +853,15 @@ EDITABLE_FIELDS = [
 
     {
         "key": "SMS_PROVIDER", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "接码通道", "help": "grizzly / smsbower / tiger / l / h；tiger 使用 Tiger SMS API；smsbower 使用 SMSBower handler_api，l/h 使用本地取号服务",
+        "label": "接码通道", "help": "grizzly / smsbower / tiger / l / h / vak；tiger 使用 Tiger SMS API；smsbower 使用 SMSBower handler_api，l/h 使用本地取号服务，vak 使用 Vak SMS API",
+        "choices": [
+            {"label": "grizzly", "value": "grizzly"},
+            {"label": "smsbower", "value": "smsbower"},
+            {"label": "tiger", "value": "tiger"},
+            {"label": "l", "value": "l"},
+            {"label": "h", "value": "h"},
+            {"label": "vak", "value": "vak"},
+        ],
     },
     {
         "key": "SMS_COUNTRY", "file": "codex.py", "type": "str", "group": "接码平台",
@@ -889,7 +897,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "SMS_API_KEY", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "GrizzlySMS API密钥", "help": "GrizzlySMS 平台 API Key，保存在 .env（SMS_API_KEY），不写回 config/*.py",
+        "label": "GrizzlySMS API密钥", "help": "GrizzlySMS 平台 API Key；Vak 的 VAK_API_KEY 留空时也会回退使用该字段",
         "storage": "env", "secret": True,
     },
     {
@@ -929,6 +937,71 @@ EDITABLE_FIELDS = [
     {
         "key": "SMSBOWER_MIN_PRICE", "file": "codex.py", "type": "str", "group": "接码平台",
         "label": "SMSBower 最低价格", "help": "可选，透传 minPrice；与最高价格一起限定号码价格区间",
+    },
+    {
+        "key": "VAK_API_BASE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Vak API 地址", "help": "官方基址：https://vak-sms.com/api",
+    },
+    {
+        "key": "VAK_API_KEY", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Vak API密钥", "help": "Vak 官方 /api 使用 apiKey=query 鉴权，保存在 .env（VAK_API_KEY）",
+        "storage": "env", "secret": True,
+    },
+    {
+        "key": "VAK_PRODUCT", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Vak 服务", "help": "OpenAI 对应的 serviceId=dr；可在 Vak 面板里直接切换服务",
+        "allow_custom": True,
+        "choices": [{"label": "OpenAI (dr)", "value": "dr"}],
+    },
+    {
+        "key": "VAK_COUNTRY", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Vak 国家", "help": "输入或从建议列表选择国家代码，如 gb / us / de / jp",
+        "allow_custom": True,
+        "choices": [
+            {"label": "gb", "value": "gb"},
+            {"label": "us", "value": "us"},
+            {"label": "de", "value": "de"},
+            {"label": "fr", "value": "fr"},
+            {"label": "es", "value": "es"},
+            {"label": "it", "value": "it"},
+            {"label": "nl", "value": "nl"},
+            {"label": "pl", "value": "pl"},
+            {"label": "tr", "value": "tr"},
+            {"label": "jp", "value": "jp"},
+            {"label": "kr", "value": "kr"},
+            {"label": "in", "value": "in"},
+            {"label": "br", "value": "br"},
+            {"label": "ca", "value": "ca"},
+            {"label": "au", "value": "au"},
+        ],
+    },
+    {
+        "key": "VAK_OPERATOR", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Vak 运营商", "help": "可选；从 Vak 国家接口的 operatorList/operators 获取。any=不限运营商",
+        "allow_custom": True,
+        "choices": [
+            {"label": "any", "value": "any"},
+            {"label": "beeline", "value": "beeline"},
+            {"label": "vodafone", "value": "vodafone"},
+            {"label": "tele2", "value": "tele2"},
+            {"label": "mts", "value": "mts"},
+            {"label": "orange", "value": "orange"},
+        ],
+    },
+    {
+        "key": "VAK_MAX_PRICE", "file": "codex.py", "type": "float", "group": "接码平台",
+        "label": "Vak 最高接受价格", "help": "0=不限制；大于 0 时优先选择不高于该价格的号码档位",
+        "allow_custom": True,
+        "choices": [
+            {"label": "0.0（不限制）", "value": "0.0"},
+            {"label": "1.0", "value": "1.0"},
+            {"label": "2.0", "value": "2.0"},
+            {"label": "3.0", "value": "3.0"},
+            {"label": "5.0", "value": "5.0"},
+            {"label": "10.0", "value": "10.0"},
+            {"label": "15.0", "value": "15.0"},
+            {"label": "20.0", "value": "20.0"},
+        ],
     },
     {
         "key": "H_API_BASE", "file": "codex.py", "type": "str", "group": "接码平台",
@@ -1315,7 +1388,7 @@ def update_config(updates: dict) -> dict:
             if key != active_profile_key and str(value) == str(current_values.get(key)):
                 continue
             raise ValueError(f"{PROFILE_FIELDS[key]} 未安装，请先安装 requirements.txt")
-        if choices:
+        if choices and not field.get("allow_custom"):
             allowed = {str(item.get("value")) for item in choices}
             if str(value) not in allowed:
                 raise ValueError(f"{key} 的值无效，可选：{', '.join(sorted(allowed))}")

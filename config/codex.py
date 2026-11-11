@@ -96,6 +96,7 @@ CPA_SAVE_CALLBACK_RECEIPT: bool = True
 #   "tiger"   = Tiger SMS，接口说明见 https://tiger-sms.com/cn/api
 #   "l"       = 本地 L 取号服务，接口说明见 L_API.md
 #   "h"       = 本地 H 取号服务，接口说明见 H_API.md
+#   "vak"     = Vak SMS 官方 API，接口文档见 https://vak-sms.com/backend/api/docs
 # ============================================================
 
 SMS_PROVIDER: str = "l"
@@ -143,6 +144,39 @@ SMS_REQUEST_TIMEOUT: int = 30
 
 
 # ============================================================
+# Vak SMS 官方 API（SMS_PROVIDER="vak" 时使用）
+#
+# Vak 官方 API：
+#   GET /getCountryList
+#   GET /getCountNumbersList
+#   GET /getOfferNumberList
+#   GET /getNumber
+#   GET /getSmsCode
+#   GET /setStatus
+#   GET /prolongNumber
+# 通过 apiKey query 参数鉴权；VAK_API_KEY 留空时会回退使用 SMS_API_KEY。
+# ============================================================
+
+# 官方文档对应的 API 基址。
+VAK_API_BASE: str = "https://vak-sms.com/api"
+
+# Vak API Key；建议写 .env。留空则使用 SMS_API_KEY。
+VAK_API_KEY: str = env_str("VAK_API_KEY", "")
+
+# Vak 默认服务；OpenAI 对应 dr。
+VAK_PRODUCT: str = "dr"
+
+# Vak 的国家代码；按 /getCountryList 返回值填写，常用示例：gb / us / de / jp。
+VAK_COUNTRY: str = "gb"
+
+# Vak 的 operator 参数；常见可先用 any，或按 /getCountryList 返回值填写。
+VAK_OPERATOR: str = "any"
+
+# 最高接受价格。0 表示不启用价格上限；>0 时下单前会优先选择不高于该价的档位。
+VAK_MAX_PRICE: float = 0.0
+
+
+# ============================================================
 # H 取号服务（SMS_PROVIDER="h" 时使用）
 # ============================================================
 
@@ -176,4 +210,4 @@ L_ADMIN_AUTH_CODE: str = env_str("L_ADMIN_AUTH_CODE", "")
 L_PHONE_PREFIX: str = ""
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'TIGER_SMS_API_BASE': 'str', 'TIGER_SMS_API_KEY': 'str', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_PRICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_POLL_INTERVAL': 'int', 'SMS_REQUEST_TIMEOUT': 'int', 'SMS_API_KEY': 'str', 'SMSBOWER_API_BASE': 'str', 'SMSBOWER_API_KEY': 'str', 'SMSBOWER_USE_V2': 'bool', 'SMSBOWER_PROVIDER_IDS': 'str', 'SMSBOWER_EXCEPT_PROVIDER_IDS': 'str', 'SMSBOWER_PHONE_EXCEPTION': 'str', 'SMSBOWER_MIN_PRICE': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str'})
+apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'TIGER_SMS_API_BASE': 'str', 'TIGER_SMS_API_KEY': 'str', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_PRICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_POLL_INTERVAL': 'int', 'SMS_REQUEST_TIMEOUT': 'int', 'SMS_API_KEY': 'str', 'SMSBOWER_API_BASE': 'str', 'SMSBOWER_API_KEY': 'str', 'SMSBOWER_USE_V2': 'bool', 'SMSBOWER_PROVIDER_IDS': 'str', 'SMSBOWER_EXCEPT_PROVIDER_IDS': 'str', 'SMSBOWER_PHONE_EXCEPTION': 'str', 'SMSBOWER_MIN_PRICE': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str', 'VAK_API_BASE': 'str', 'VAK_API_KEY': 'str', 'VAK_PRODUCT': 'str', 'VAK_COUNTRY': 'str', 'VAK_OPERATOR': 'str', 'VAK_MAX_PRICE': 'float'})
