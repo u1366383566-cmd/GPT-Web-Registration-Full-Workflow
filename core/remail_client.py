@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -516,33 +517,180 @@ def _wait_for_order_credentials(order: dict) -> tuple[str, str, str]:
     raise RemailError(f"Remail 订单等待 service token 超时: order={order_no}, status={status}")
 
 
+# 首选后缀库存被抢空时按顺序回退。outlook.com 通常有数十万存量，最稳。
+_FALLBACK_EMAIL_SUFFIXES = ("outlook.com", "outlook.jp", "outlook.in")
+# 同一后缀遇到 422 Insufficient inventory 时的重试次数与间隔：
+# Remail 的库存是并发抢占的，重试几次通常就能拿到，不必立刻换后缀。
+_INVENTORY_RETRY_ATTEMPTS = 3
+_INVENTORY_RETRY_DELAY = 2.0
+
+# 已复用过或明确要跳过的订单邮箱（进程内），防止同一邮箱被两个任务同时占用。
+_REUSED_ORDER_EMAILS: set[str] = set()
+
+
+def _reuse_enabled() -> bool:
+    """是否优先复用账户里「已购买但还没注册成功」的订单。
+
+    注册失败时订单仍然是 active，如果每次都重新下单会重复扣费。
+    .env 里设 REMAIL_REUSE_EXISTING_ORDERS=False 可关闭该行为。
+    """
+    raw = str(os.getenv("REMAIL_REUSE_EXISTING_ORDERS", "") or "").strip().lower()
+    return raw not in ("0", "false", "no", "off", "n", "f")
+
+
+def _skip_emails() -> set[str]:
+    """始终跳过的邮箱列表（逗号分隔），用于排除已经注册成功的邮箱。"""
+    raw = str(os.getenv("REMAIL_REUSE_SKIP_EMAILS", "") or "")
+    return {item.strip().casefold() for item in raw.replace(";", ",").split(",") if item.strip()}
+
+
+def _registered_emails() -> set[str]:
+    """查询本地账号库，返回已注册成功的邮箱集合（小写）。
+
+    复用已购订单前必须排除它们：邮箱已注册时 OpenAI 会进入登录/MFA 流程，
+    注册代码填不了 authenticator 验证码，任务会卡死在 mfa-challenge 页。
+    """
+    try:
+        from core import db as _db
+        conn = _db._get_conn()
+        rows = conn.execute("SELECT email FROM accounts").fetchall()
+        return {str(r[0]).strip().casefold() for r in rows if r and r[0]}
+    except Exception as exc:
+        logger.debug("[Remail] 查询已注册账号失败（跳过排除）：%s: %s", type(exc).__name__, str(exc)[:120])
+        return set()
+
+
+def _claim_existing_order(project_id: int, email_suffix: str) -> RemailAccount | None:
+    """从账户里挑一个已购买、仍 active、且本次进程尚未复用的订单。"""
+    if not _reuse_enabled():
+        return None
+    try:
+        payload = _request("GET", "/v1/open/orders", params={"pageSize": 30})
+    except RemailError as exc:
+        logger.debug("[Remail] 查询已有订单失败，改为重新下单: %s", exc)
+        return None
+
+    suffix = str(email_suffix or "").strip().lower()
+    skip = _skip_emails() | _registered_emails()
+    for item in _order_list_items(payload):
+        if str(item.get("status") or "").strip().lower() != "active":
+            continue
+        order_no = str(_first_value(item, "orderNo", "order_no") or "").strip()
+        delivery = str(_first_value(item, "deliveryEmail", "delivery_email") or "").strip()
+        if not order_no or "@" not in delivery:
+            continue
+        key = delivery.casefold()
+        if suffix and not key.endswith("@" + suffix):
+            continue
+        if key in _REUSED_ORDER_EMAILS or key in skip:
+            continue
+        if get_account_context(delivery) is not None:
+            continue
+        # 列表接口通常不回传 serviceToken，必须读订单详情才能取件。
+        try:
+            detail = _unwrap_order(_request("GET", f"/v1/open/orders/{quote(order_no, safe='')}"))
+        except RemailError as exc:
+            logger.debug("[Remail] 读取订单详情失败 order=%s: %s", order_no, exc)
+            continue
+        credentials = _order_credentials(detail)
+        if not credentials:
+            continue
+        email, service_token, matched_order_no = credentials
+        account = RemailAccount(
+            email=email,
+            service_token=service_token,
+            order_no=matched_order_no or order_no,
+            project_id=project_id,
+            email_suffix=suffix or _email_suffix(),
+        )
+        _REUSED_ORDER_EMAILS.add(email.casefold())
+        _cache_context(account)
+        logger.info("[Remail] 复用已购买订单（不重复扣费）: %s order=%s", email, order_no)
+        return account
+    return None
+
+
+def _is_insufficient_inventory(exc: Exception) -> bool:
+    """判断 Remail 返回的是否为「该后缀库存不足」，只有这种才值得换后缀重试。"""
+    text = str(exc).lower()
+    return "insufficient inventory" in text or ("inventory" in text and "insufficient" in text)
+
+
 def pick_account() -> RemailAccount:
-    """按配置创建一个 Remail 接码/长效购买订单并返回交付邮箱。"""
+    """按配置创建一个 Remail 接码/长效购买订单并返回交付邮箱。
+
+    配置的后缀（例如 icloud.com）如果被抢空，Remail 会返回 422
+    Insufficient inventory；此时按 _FALLBACK_EMAIL_SUFFIXES 依次换后缀重试，
+    避免整条注册任务因为单一后缀缺货而直接失败。
+    """
     project_id = _project_id()
     email_suffix = _email_suffix()
     service_mode = _service_mode()
     supply = _supply_policy()
-    idempotency_key = f"turb-gpt-free-register-{uuid.uuid4()}"
 
-    payload = _request(
-        "POST",
-        "/v1/open/orders",
-        params={"serviceMode": service_mode, "supply": supply},
-        json_body={"projectId": project_id, "emailSuffix": email_suffix},
-        headers={"Idempotency-Key": idempotency_key},
+    reused = _claim_existing_order(project_id, email_suffix)
+    if reused is not None:
+        return reused
+
+    suffixes = [email_suffix]
+    for candidate in _FALLBACK_EMAIL_SUFFIXES:
+        if candidate and candidate.lower() not in {s.lower() for s in suffixes}:
+            suffixes.append(candidate)
+
+    last_inventory_error: Exception | None = None
+    for suffix in suffixes:
+        for attempt in range(1, _INVENTORY_RETRY_ATTEMPTS + 1):
+            idempotency_key = f"turb-gpt-free-register-{uuid.uuid4()}"
+            try:
+                payload = _request(
+                    "POST",
+                    "/v1/open/orders",
+                    params={"serviceMode": service_mode, "supply": supply},
+                    json_body={"projectId": project_id, "emailSuffix": suffix},
+                    headers={"Idempotency-Key": idempotency_key},
+                )
+            except RemailError as exc:
+                if not _is_insufficient_inventory(exc):
+                    raise
+                # Remail 的「库存不足」经常是瞬时的（并发抢占/库存快照抖动），
+                # 同一后缀短时间内重试几次通常就能抢到。
+                last_inventory_error = exc
+                if attempt < _INVENTORY_RETRY_ATTEMPTS:
+                    logger.warning(
+                        "[Remail] 后缀 %s 暂时无库存（第 %s/%s 次），%.1fs 后重试：%s",
+                        suffix,
+                        attempt,
+                        _INVENTORY_RETRY_ATTEMPTS,
+                        _INVENTORY_RETRY_DELAY,
+                        exc,
+                    )
+                    time.sleep(_INVENTORY_RETRY_DELAY)
+                    continue
+                logger.warning("[Remail] 后缀 %s 连续 %s 次无库存，切换下一个后缀", suffix, _INVENTORY_RETRY_ATTEMPTS)
+                break
+
+            order = _unwrap_order(payload)
+            email, service_token, order_no = _wait_for_order_credentials(order)
+            account = RemailAccount(
+                email=email,
+                service_token=service_token,
+                order_no=order_no,
+                project_id=project_id,
+                email_suffix=suffix,
+            )
+            _cache_context(account)
+            logger.info(
+                "[Remail] 已创建邮箱订单: %s order=%s project=%s suffix=%s",
+                email,
+                order_no or "-",
+                project_id,
+                suffix,
+            )
+            return account
+
+    raise RemailError(
+        f"Remail 所有候选后缀均无库存（已尝试 {', '.join(suffixes)}）: {last_inventory_error}"
     )
-    order = _unwrap_order(payload)
-    email, service_token, order_no = _wait_for_order_credentials(order)
-    account = RemailAccount(
-        email=email,
-        service_token=service_token,
-        order_no=order_no,
-        project_id=project_id,
-        email_suffix=email_suffix,
-    )
-    _cache_context(account)
-    logger.info("[Remail] 已创建邮箱订单: %s order=%s project=%s", email, order_no or "-", project_id)
-    return account
 
 
 def get_email() -> str:

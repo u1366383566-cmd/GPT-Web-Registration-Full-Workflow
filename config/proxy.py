@@ -9,10 +9,15 @@
     - socks5://            SOCKS5（DNS 本地解析，可能泄漏）
     - socks5h://           SOCKS5（DNS 在代理端解析，推荐，避免 DNS-IP 错配）
 """
+import logging
+import os
 import random
+import time
 from urllib.parse import quote, urlparse
 
 from config.env_loader import apply_env_overrides
+
+logger = logging.getLogger(__name__)
 
 
 # 本地代理入口；实际出口地区以代理/分流规则为准。
@@ -96,13 +101,110 @@ def normalize_proxy_list(values, default_scheme: str = "http") -> list[str]:
     ]
 
 
-def pick_proxy() -> str:
-    """从代理池中随机抽取一个代理 URL；池为空时返回空串（即不使用代理）。"""
-    return random.choice(PROXY_POOL) if PROXY_POOL else ""
+# 代理预检：注册前先探一下这个节点通不通，避免把一个已经抖掉的节点写进浏览器。
+# 关闭方法：.env 里设 PROXY_PREFLIGHT_ENABLED=False
+_PROXY_PREFLIGHT_TARGETS = (
+    "https://chatgpt.com/cdn-cgi/trace",
+    "https://auth-cdn.oaistatic.com/",
+)
+_PREFLIGHT_CACHE: dict[str, tuple[float, bool]] = {}
+_PREFLIGHT_CACHE_TTL = 90.0
+# 最近一次被选中的代理，以及本次进程内判定为「刚失败」的代理。
+# 任务重试时会调用 exclude_proxy()，让下一次选择避开刚掉线的节点。
+LAST_PICKED = ""
+_EXCLUDED: set[str] = set()
 
 
-# 兼容入口：默认每次进程启动随机选一个，作为本次注册全程的固定代理
-PROXY = pick_proxy()
+def exclude_proxy(url: str) -> None:
+    """把某个代理标记为暂时不可用（本次进程内有效，直到 restart）。"""
+    if url:
+        _EXCLUDED.add(url)
+        logger.warning("[ProxyPool] 已暂时排除节点 %s", url.rsplit("@", 1)[-1])
+
+
+def clear_exclusions() -> None:
+    _EXCLUDED.clear()
+    _PREFLIGHT_CACHE.clear()
+
+
+def _preflight_enabled() -> bool:
+    raw = str(os.getenv("PROXY_PREFLIGHT_ENABLED", "") or "").strip().lower()
+    return raw not in ("0", "false", "no", "off", "n", "f")
+
+
+def _preflight_timeout() -> float:
+    try:
+        return max(2.0, min(20.0, float(os.getenv("PROXY_PREFLIGHT_TIMEOUT", "") or 6.0)))
+    except ValueError:
+        return 6.0
+
+
+def probe_proxy(url: str, timeout: float | None = None) -> bool:
+    """探测单个代理能否跑到 OpenAI 的静态资源域；任一目标成功即视为可用。"""
+    import requests
+
+    limit = timeout if timeout is not None else _preflight_timeout()
+    for target in _PROXY_PREFLIGHT_TARGETS:
+        try:
+            resp = requests.get(
+                target,
+                proxies={"http": url, "https": url},
+                timeout=limit,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            )
+        except Exception:
+            continue
+        if resp.status_code < 500:
+            return True
+    return False
+
+
+def pick_proxy(preflight: bool | None = None) -> str:
+    """从代理池里挑一个可用代理。
+
+    代理池顺序即优先级：按顺序预检，返回第一个探测通过的节点；全部探测失败时
+    退回池内第一条（并在日志里说明），不让注册因为预检直接失败。
+    ``preflight=False`` 时不探测，直接按池内顺序取第一条。
+    """
+    pool = PROXY_POOL
+    if not pool:
+        return ""
+    use_preflight = _preflight_enabled() if preflight is None else bool(preflight)
+
+    candidates = [url for url in pool if url not in _EXCLUDED]
+    if not candidates:
+        # 全部被排除时解除排除，避免把自己锁死。
+        _EXCLUDED.clear()
+        candidates = list(pool)
+    if not use_preflight:
+        globals()["LAST_PICKED"] = candidates[0]
+        return candidates[0]
+
+    now = time.time()
+    for url in candidates:
+        cached = _PREFLIGHT_CACHE.get(url)
+        if cached and now - cached[0] < _PREFLIGHT_CACHE_TTL:
+            ok = cached[1]
+        else:
+            ok = probe_proxy(url)
+            _PREFLIGHT_CACHE[url] = (now, ok)
+        if ok:
+            if url != pool[0]:
+                logger.warning("[ProxyPool] 首选节点不可用，改用 %s", url.rsplit("@", 1)[-1])
+            globals()["LAST_PICKED"] = url
+            return url
+
+    logger.warning(
+        "[ProxyPool] 全部 %s 个节点预检未通过，仍使用 %s",
+        len(candidates),
+        candidates[0].rsplit("@", 1)[-1],
+    )
+    globals()["LAST_PICKED"] = candidates[0]
+    return candidates[0]
+
+
+# 兼容入口：进程启动时只做纯本地选择，不做网络预检，避免拖慢启动。
+PROXY = random.choice(PROXY_POOL) if PROXY_POOL else ""
 
 # ---- .env overrides for WebUI editable fields ----
 apply_env_overrides(globals(), {
@@ -122,4 +224,5 @@ apply_env_overrides(globals(), {
 })
 PROXY_POOL = normalize_proxy_list(PROXY_POOL)
 PLAN_CHECK_PROXY = normalize_proxy_list(PLAN_CHECK_PROXY)
-PROXY = pick_proxy()
+# 归一化后的兼容入口：启动阶段不做网络预检，注册流程请调用 pick_proxy()。
+PROXY = random.choice(PROXY_POOL) if PROXY_POOL else ""

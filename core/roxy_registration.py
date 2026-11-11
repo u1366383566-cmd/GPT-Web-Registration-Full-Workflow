@@ -378,6 +378,54 @@ def _page_warmup(driver, *, reason: str = "") -> None:
 _MISSING_PAGE_ELEMENT_REFRESH_RETRIES = 3
 
 
+def _is_dom_blank(driver) -> bool:
+    """判断当前文档是否为「空壳」：连表单/按钮/输入框都不存在。
+
+    典型场景是 SPA 的 JS/CSS 从 CDN 拉取失败（住宅代理瞬时丢包），页面只有
+    空白 body，URL 却已经是正确路由。这种情况刷新未必能恢复，需要禁用缓存后
+    整页重新 GET，强制重新拉取静态资源。
+    """
+    try:
+        return bool(
+            driver.execute_script(
+                "return !document.querySelector('input,button,form,[role=\"button\"]');"
+            )
+        )
+    except Exception:
+        return False
+
+
+def _wait_dom_stable(driver, *, timeout: float = 8.0, quiet_secs: float = 3.0) -> bool:
+    """等待页面 DOM 进入稳定状态：连续 quiet_secs 秒内元素数与正文长度无变化。
+
+    SPA 慢渲染时元素是分批挂载的，固定 sleep 或立刻刷新都会误判。返回 True
+    表示「稳定」——注意稳定不等于渲染完成，只是不再变化，调用方仍需检查
+    目标元素是否存在。超时返回 False（DOM 一直在变，说明页面仍在加载/跳转）。
+    """
+    end = time.time() + timeout
+
+    def _fingerprint():
+        try:
+            return driver.execute_script(
+                "return [document.querySelectorAll('*').length,"
+                " (document.body ? (document.body.innerText||'').length : 0)];"
+            ) or (0, 0)
+        except Exception:
+            return (-1, -1)
+
+    last_fp = _fingerprint()
+    last_change = time.time()
+    while time.time() < end:
+        time.sleep(0.5)
+        fp = _fingerprint()
+        if fp != last_fp:
+            last_fp = fp
+            last_change = time.time()
+        elif time.time() - last_change >= quiet_secs:
+            return True
+    return False
+
+
 def _refresh_after_missing_page_element(driver, step: str, retry_index: int) -> bool:
     """元素缺失时刷新当前页面，避免把页面迟渲染误判成流程失败。"""
     max_retries = _MISSING_PAGE_ELEMENT_REFRESH_RETRIES
@@ -389,9 +437,23 @@ def _refresh_after_missing_page_element(driver, step: str, retry_index: int) -> 
             "%s %s未找到，刷新页面重试（第 %s/%s 次）：url=%s",
             _log_prefix(driver), step, retry_index + 1, max_retries, current_url[:180],
         )
+        # 先等 DOM 稳定：SPA 分批挂载时盲刷只会打断正在进行的渲染。
+        _wait_dom_stable(driver, timeout=8.0, quiet_secs=3.0)
         driver.refresh()
-        time.sleep(1.5)
+        _wait_dom_stable(driver, timeout=10.0, quiet_secs=2.5)
         _page_warmup(driver, reason=f"missing_{step}")
+        if _is_dom_blank(driver) and current_url:
+            try:
+                driver.execute_cdp_cmd("Network.setCacheDisabled", {"cacheDisabled": True})
+            except Exception:
+                pass
+            logger.warning(
+                "%s 页面为空文档（静态资源可能加载失败），禁用缓存后重新导航：url=%s",
+                _log_prefix(driver), current_url[:180],
+            )
+            driver.get(current_url)
+            _wait_dom_stable(driver, timeout=12.0, quiet_secs=2.5)
+            _page_warmup(driver, reason=f"blank_{step}")
         return True
     except Exception as exc:
         logger.warning(
@@ -1176,6 +1238,20 @@ def _type_otp(driver, code: str, *, attempts: int = 4, retry_delay: float = 1.5)
                     human_delay("keystroke")
             return
 
+        # 验证码等待期间页面可能已经离开验证码页（邮箱提交生效较慢 / 会话
+        # 已升级为登录态）。此时 URL 不再是 email-verification，刷新只会
+        # 离目标越来越远；先检测并直接失败，让上层按「网络类失败」换节点重试。
+        try:
+            current_url = str(driver.current_url or "").lower()
+        except Exception:
+            current_url = ""
+        if current_url and not any(x in current_url for x in (
+            "email-verification", "verification-code", "code", "log-in/otp", "otp",
+        )):
+            raise RuntimeError(
+                f"等待 OTP 输入框期间页面已离开验证码页: url={current_url}"
+            )
+
         if not _refresh_after_missing_page_element(driver, "OTP输入框", refresh_retry):
             break
 
@@ -1699,6 +1775,33 @@ def _is_login_password_page(driver) -> bool:
     return '/log-in/password' in url
 
 
+def _submit_password_by_enter(driver) -> dict:
+    """用真实键盘事件在密码框回车提交。
+
+    React/Auth0 页面上的合成 click 有时不会触发提交，原生 Enter 键由浏览器
+    执行隐式表单提交，事件可信度更高，作为点击后的兜底手段。
+    """
+    try:
+        from selenium.webdriver.common.keys import Keys
+
+        elements = driver.find_elements(
+            "css selector",
+            'input[type="password"],input[autocomplete="new-password"],input[name*="password" i]',
+        )
+        for el in elements:
+            try:
+                if not el.is_displayed() or not el.is_enabled():
+                    continue
+                el.click()
+                el.send_keys(Keys.ENTER)
+                return {"ok": True, "reason": "enter_key"}
+            except Exception:
+                continue
+        return {"ok": False, "reason": "missing_visible_password_input"}
+    except Exception as exc:
+        return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+
 def _resubmit_signup_password_form(driver) -> dict:
     """密码页点击无跳转时，针对当前密码表单执行一次原生 requestSubmit。"""
     try:
@@ -1708,7 +1811,9 @@ def _resubmit_signup_password_form(driver) -> dict:
         const input = [...document.querySelectorAll('input[type="password"],input[name*="password" i],input[autocomplete="new-password"]')]
           .find(visible);
         const form = input?.closest('form');
-        const button = form ? [...form.querySelectorAll('button[type="submit"],input[type="submit"],button')]
+        // requestSubmit() 只接受真正的 submit 按钮，传普通 button 会抛
+        // "The specified element is not a submit button"，因此这里只取 submit 类型。
+        const button = form ? [...form.querySelectorAll('button[type="submit"],input[type="submit"]')]
           .find(el => visible(el) && !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true') : null;
         const errors = [...document.querySelectorAll('[role="alert"],[aria-live="assertive"],[aria-live="polite"],.react-aria-FieldError,[slot="errorMessage"],[class*="error"]')]
           .filter(visible).map(el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 10);
@@ -2018,6 +2123,9 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
                 logger.info("%s 密码页点击后仍未跳转，原生表单补交一次：%s", _log_prefix(driver), retry_result)
                 if retry_result.get("reason") == "page_errors":
                     raise RuntimeError(f"密码页提交被页面拒绝: {retry_result}")
+                if _is_signup_password_page(driver):
+                    enter_result = _submit_password_by_enter(driver)
+                    logger.info("%s 密码页键盘回车兜底提交：%s", _log_prefix(driver), enter_result)
             if not _is_signup_password_page(driver):
                 return password
             time.sleep(0.5)
@@ -2105,6 +2213,11 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
     today = date.today()
     age = today.year - int(y) - ((today.month, today.day) < (int(m), int(d)))
     last_snapshot = {}
+    # URL 漂移早停：OTP 提交假放行后页面仍停在验证码页，等待资料页只会
+    # 白白耗满 timeout；连续停留超过 _PROFILE_WAIT_DRIFT_LIMIT 秒立即早停，
+    # 错误文本命中重试白名单，由上层换节点重跑。
+    _PROFILE_WAIT_DRIFT_LIMIT = 12.0
+    drift_started: float | None = None
     while time.time() < end:
         time.sleep(1)
         if _has_access_token(driver):
@@ -2113,6 +2226,21 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
         snap = _page_snapshot(driver)
         last_snapshot = snap
         if not _is_profile_like(snap):
+            current_url = str(snap.get('url') or '').lower()
+            stuck_on_verification = 'email-verification' in current_url
+            on_login_instead = 'log-in' in current_url and 'otp' not in current_url
+            if stuck_on_verification or on_login_instead:
+                if drift_started is None:
+                    drift_started = time.time()
+                elif time.time() - drift_started >= _PROFILE_WAIT_DRIFT_LIMIT:
+                    reason = (
+                        "资料页等待早停：OTP 提交未生效，仍停留在 email-verification"
+                        if stuck_on_verification
+                        else "资料页等待早停：会话漂移为登录态（log-in）"
+                    )
+                    raise RuntimeError(f"{reason} url={current_url[:120]}")
+            else:
+                drift_started = None
             logger.info('%s 等待资料页中：url=%s', _log_prefix(driver), snap.get('url'))
             continue
 
@@ -2449,6 +2577,27 @@ def run_roxy_registration(
             _clear_otp_inputs(driver)
             _type_otp(driver, current_otp)
             logger.info("[Roxy注册][OTP] 已填写邮箱验证码")
+            # React 受控输入：send_keys 偶发不触发状态更新，Continue 会一直
+            # disabled。检测到这种情况时用原生 setter 强制设值并派发事件。
+            try:
+                force_result = driver.execute_script(r"""
+                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+                const input = [...document.querySelectorAll('input[autocomplete="one-time-code"],input[name="code"],input[inputmode="numeric"]')].find(visible);
+                if (!input) return {ok:false, reason:'missing_input'};
+                const buttons = [...document.querySelectorAll('button[type="submit"]')].filter(visible);
+                const submit = buttons.find(b => !b.disabled && b.getAttribute('aria-disabled') !== 'true');
+                if (submit) return {ok:true, reason:'submit_enabled'};
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(input, arguments[0]); else input.value = arguments[0];
+                input.dispatchEvent(new Event('input', {bubbles:true}));
+                input.dispatchEvent(new Event('change', {bubbles:true}));
+                return {ok:true, reason:'force_set'};
+                """, current_otp) or {}
+                if force_result.get("reason") == "force_set":
+                    logger.warning("%s[OTP] 提交按钮仍禁用，已用原生事件强制回填验证码", _log_prefix(driver))
+                    time.sleep(1.0)
+            except Exception as force_exc:
+                logger.debug("%s[OTP] 强制回填检查跳过：%s", _log_prefix(driver), force_exc)
             _check_manual_stop()
             human_delay("otp_input")
             try:
@@ -2460,12 +2609,60 @@ def run_roxy_registration(
             outcome = _wait_after_email_otp_submit(driver, timeout=30)
             _traffic_checkpoint()
             if outcome == 'accepted':
+                # 「accepted」可能是真跳转，也可能是 30s 超时后网络慢被放行。
+                # 若仍停留在验证码页，说明提交请求没有生效（代理丢包/点击失效），
+                # 此时用键盘回车在验证码框补交一次，而不是当成功放行去等资料页。
+                if _is_email_verification_page(driver) and not _has_access_token(driver):
+                    logger.warning("%s[OTP] 提交被放行但页面仍在验证码页，键盘回车补交一次", _log_prefix(driver))
+                    try:
+                        from selenium.webdriver.common.keys import Keys
+                        code_inputs = driver.find_elements(
+                            "css selector",
+                            'input[autocomplete="one-time-code"],input[name="code"],input[inputmode="numeric"]',
+                        )
+                        pressed = False
+                        for el in code_inputs:
+                            try:
+                                if not el.is_displayed():
+                                    continue
+                                el.click()
+                                el.send_keys(Keys.ENTER)
+                                pressed = True
+                                break
+                            except Exception:
+                                continue
+                        if not pressed:
+                            driver.switch_to.active_element.send_keys(Keys.ENTER)
+                        # 给补交后的跳转留足时间；期间每 2s 检查一次是否离开验证码页。
+                        end_retry = time.time() + 40
+                        while time.time() < end_retry:
+                            if not _is_email_verification_page(driver) or _has_access_token(driver):
+                                logger.info("%s[OTP] 回车补交后页面已跳转", _log_prefix(driver))
+                                break
+                            time.sleep(2)
+                        else:
+                            logger.warning("%s[OTP] 回车补交后 40s 仍在验证码页，按验证码流程重试", _log_prefix(driver))
+                            outcome = 'invalid'
+                    except Exception as enter_exc:
+                        logger.warning("%s[OTP] 回车补交失败：%s: %s", _log_prefix(driver), type(enter_exc).__name__, str(enter_exc)[:120])
+                        outcome = 'invalid'
+                else:
+                    break
+            if outcome == 'accepted':
                 break
             if otp_attempt >= max_otp_attempts:
                 raise RuntimeError("邮箱验证码连续错误/过期，已达到最大重试次数")
             logger.warning("[Roxy注册][OTP] 验证码错误/过期，准备重新发送并重新获取验证码（%s/%s）", otp_attempt + 1, max_otp_attempts)
             otp_after_ts = time.time()
-            _click_resend_email_otp(driver, timeout=25)
+            try:
+                _click_resend_email_otp(driver, timeout=25)
+            except RuntimeError as resend_exc:
+                # 重发按钮缺失/禁用（React 未渲染完或按钮冷却中）不致命：
+                # 之前发出的验证码往往仍在路上，直接回到取码循环重新拿最新码。
+                logger.warning(
+                    "%s[OTP] 重新发送按钮不可点击，跳过重发直接等待最新验证码：%s",
+                    _log_prefix(driver), str(resend_exc)[:140],
+                )
             _traffic_checkpoint()
             human_delay("api")
             current_otp = None
