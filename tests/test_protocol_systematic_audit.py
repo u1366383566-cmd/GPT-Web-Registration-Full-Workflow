@@ -135,6 +135,8 @@ class FinalSaveTests(unittest.TestCase):
         db._save_outlook([{'id': 41, 'email': 'A@example.test', 'password': 'mail-password',
                            'client_id': 'client', 'refresh_token': 'refresh', 'status': 'available'},
                           {'id': 42, 'email': 'untouched@example.test', 'status': 'available'}])
+        with closing(db._sqlite_conn()) as conn:
+            untouched = json.loads(conn.execute('SELECT payload FROM email_pool WHERE id=?', (42,)).fetchone()['payload'])
         rid = db.insert_account(email='a@example.test', access_token='final', totp_secret='totp',
                                 extra={'registration_stage': 'complete', 'registration_password': 'gpt-password'})
         account = db.get_account(rid)
@@ -147,7 +149,7 @@ class FinalSaveTests(unittest.TestCase):
         self.assertEqual(rows[0]['access_token'], 'final')
         self.assertEqual(rows[0]['status'], 'used')
         self.assertTrue(rows[0]['updated_at'])
-        self.assertEqual(rows[1], {'id': 42, 'email': 'untouched@example.test', 'status': 'available'})
+        self.assertEqual(rows[1], untouched)
 
     def test_final_save_rolls_back_account_if_pool_write_fails(self):
         db._save_outlook([{'id': 1, 'email': 'a@example.test', 'status': 'available'}])

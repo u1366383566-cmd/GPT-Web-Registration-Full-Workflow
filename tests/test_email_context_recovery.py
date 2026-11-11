@@ -2,6 +2,7 @@
 import json
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -181,7 +182,7 @@ class EmailContextRecoveryTests(unittest.TestCase):
 
     def test_malformed_saved_metadata_is_ignored(self):
         self.seed('cloudflare', {})
-        with db._sqlite_conn() as conn:
+        with closing(db._sqlite_conn()) as conn, conn:
             row = db.get_account_by_email(EMAIL)
             row['extra_json'] = '{broken'
             conn.execute('UPDATE accounts SET payload=? WHERE id=?', (json.dumps(row), row['id']))

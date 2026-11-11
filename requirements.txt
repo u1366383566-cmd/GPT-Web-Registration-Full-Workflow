@@ -11,4 +11,5 @@ cryptography>=41
 cloakbrowser[geoip]>=0.4.10
 playwright>=1.49.0
 python-dotenv>=1.0.0
+tzdata; sys_platform == "win32"
 playwright-stealth>=2.0.3

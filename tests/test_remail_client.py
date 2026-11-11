@@ -179,7 +179,8 @@ class RemailClientTests(unittest.TestCase):
         }
         request.return_value = response
 
-        account = remail_client.restore_account_context("fresh@outlook.test")
+        with patch.object(email_config, "REMAIL_API_KEY", "rk-test-key"):
+            account = remail_client.restore_account_context("fresh@outlook.test")
 
         self.assertIsNotNone(account)
         self.assertEqual(account.email, "FRESH@OUTLOOK.TEST")
