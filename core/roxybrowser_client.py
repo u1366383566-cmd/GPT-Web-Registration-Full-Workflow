@@ -49,6 +49,7 @@ class RoxyOpenResult:
     webdriver_url: str | None = None
     ws_endpoint: str | None = None
     created_by_run: bool = False
+    browser_pid: int | None = None
 
 
 def _strip_slashes(value: str) -> str:
@@ -580,6 +581,11 @@ class RoxyBrowserClient:
         if self._proxy_pool_target:
             result = dict(result)
             result["proxy_pool_target"] = self._proxy_pool_target
+        browser_pid = None
+        try:
+            browser_pid = int((result or {}).get("pid") or None) or None
+        except (TypeError, ValueError):
+            browser_pid = None
         return RoxyOpenResult(
             pid,
             result,
@@ -587,6 +593,7 @@ class RoxyBrowserClient:
             webdriver_url=webdriver_url,
             ws_endpoint=ws_endpoint,
             created_by_run=created_by_run,
+            browser_pid=browser_pid,
         )
 
     def close_profile(self, profile_id: str) -> None:
@@ -629,13 +636,28 @@ class RoxyBrowserClient:
             logger.warning("[Roxy] 删除环境失败：%s", exc)
 
     def cleanup_profile(self, opened: RoxyOpenResult | None) -> None:
-        """任务结束清理：关闭窗口；一号一环境时删除本轮创建的 Profile。"""
+        """任务结束清理：关闭窗口；一号一环境时删除本轮创建的 Profile。
+
+        浏览器进程崩溃（代理 RST 风暴）后 close/delete API 会对死会话再次报错；
+        这里先检测 pid 存活，死亡时跳过 close 直接删除，并对 close/delete 的
+        已知无害失败静默放行，保证清理路径本身不抛异常。
+        """
         keep_open = bool(getattr(_cfg, "ROXY_KEEP_BROWSER_OPEN", False))
         try:
             if not opened or not opened.profile_id:
                 return
+            browser_alive = self._is_browser_process_alive(opened)
             if not keep_open:
-                self.close_profile(opened.profile_id)
+                if browser_alive:
+                    try:
+                        self.close_profile(opened.profile_id)
+                    except Exception as exc:
+                        logger.warning(
+                            "[Roxy] 关闭环境失败（浏览器可能已退出），继续删除：%s: %s",
+                            type(exc).__name__, str(exc)[:120],
+                        )
+                else:
+                    logger.info("[Roxy] 浏览器进程已退出，跳过 close 直接清理：%s", opened.profile_id)
 
             should_delete = (
                 bool(getattr(_cfg, "ROXY_ONE_PROFILE_PER_ACCOUNT", True))
@@ -647,10 +669,35 @@ class RoxyBrowserClient:
                 if keep_open:
                     logger.info("[Roxy] ROXY_KEEP_BROWSER_OPEN=True，跳过删除环境：%s", opened.profile_id)
                     return
-                self.delete_profile(opened.profile_id)
+                try:
+                    self.delete_profile(opened.profile_id)
+                except Exception as exc:
+                    logger.warning(
+                        "[Roxy] 删除环境失败（下次创建不受影响）：%s: %s",
+                        type(exc).__name__, str(exc)[:120],
+                    )
         finally:
             if not keep_open:
                 self.close_proxy_pool_relay()
+
+    @staticmethod
+    def _is_browser_process_alive(opened: RoxyOpenResult) -> bool:
+        """检查本轮浏览器主进程是否仍存活；拿不到 pid 时按存活处理。"""
+        pid = getattr(opened, "browser_pid", None)
+        if not pid:
+            return True
+        try:
+            import ctypes
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return False
+            exit_code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+            ctypes.windll.kernel32.CloseHandle(handle)
+            # STILL_ACTIVE == 259
+            return bool(ok) and exit_code.value == 259
+        except Exception:
+            return True
 
     def close_proxy_pool_relay(self) -> None:
         relay, self._proxy_pool_relay = self._proxy_pool_relay, None

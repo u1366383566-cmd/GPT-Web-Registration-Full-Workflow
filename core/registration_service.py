@@ -10,7 +10,9 @@
     → 创建 5 个任务，丢入线程池，立即返回 [job_dict, ...]
 """
 import logging
+import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -295,8 +297,111 @@ class _JobLogContext:
             logging.getLogger().removeHandler(self.handler)
 
 
+# 这些错误文本代表「页面/链路瞬时问题」，值得换一个代理节点再跑一次；
+# 账号已存在、密码被拒、邮箱无效等业务性错误不在此列。
+_TRANSIENT_FAILURE_MARKERS = (
+    "密码页处理失败",
+    "密码提交后仍停留在注册密码页",
+    "为空文档",
+    "找不到邮箱输入框",
+    "找不到 OTP 输入框",
+    "InvalidSessionIdException",
+    "等待/填写资料页超时",
+    "资料页等待早停",
+    "会话漂移为登录态",
+    "页面已离开验证码页",
+    "连接被强制关闭",
+    "ConnectionReset",
+    "10054",
+    "timed out",
+    "TimeoutError",
+    "邮箱验证码连续错误/过期",
+    "ERR_",
+    "代理链",
+)
+
+
+def _is_transient_registration_failure(text: str) -> bool:
+    value = str(text or "")
+    return any(marker in value for marker in _TRANSIENT_FAILURE_MARKERS)
+
+
+def _kill_orphan_chromedrivers() -> int:
+    """清理残留的 chromedriver 进程，防止孤儿进程累积耗尽资源。
+
+    只杀命令行里带本项目特征（RoxyBrowser chrome-bin / chromedriver）的进程，
+    不碰系统里其它 chromedriver。返回杀掉的个数。wmic 在新版 Windows 可能
+    不存在，回退到 PowerShell CIM 查询。
+    """
+    killed = 0
+    pids: dict[str, str] = {}  # pid -> commandline
+    try:
+        output = subprocess.run(
+            ["wmic", "process", "where", "name='chromedriver.exe'", "get", "processid,commandline"],
+            capture_output=True, text=True, timeout=15,
+        ).stdout or ""
+        for line in output.splitlines():
+            line = line.strip()
+            if "chromedriver" in line.lower():
+                for token in reversed(line.split()):
+                    if token.strip('"').isdigit():
+                        pids[token.strip('"')] = line
+                        break
+    except (FileNotFoundError, Exception):
+        pass
+
+    if not pids:
+        try:
+            output = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process -Filter \"Name='chromedriver.exe'\" | "
+                 "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }"],
+                capture_output=True, text=True, timeout=20,
+            ).stdout or ""
+            for line in output.splitlines():
+                line = line.strip()
+                if "|" not in line or "chromedriver" not in line.lower():
+                    continue
+                pid, cmd = line.split("|", 1)
+                if pid.strip().isdigit():
+                    pids[pid.strip()] = cmd
+        except Exception:
+            return 0
+
+    for pid, cmd in pids.items():
+        # 只杀 RoxyBrowser 相关的 chromedriver，避免误伤系统其它工具。
+        lowered = (cmd or "").lower()
+        if "roxybrowser" not in lowered and "chrome-bin" not in lowered:
+            continue
+        try:
+            subprocess.run(["taskkill", "/PID", pid, "/F"], capture_output=True, timeout=10)
+            killed += 1
+            logger.warning("[Cleanup] 已清理孤儿 chromedriver PID=%s", pid)
+        except Exception:
+            continue
+    return killed
+
+
+def _retry_after_transient_failure(log_logger, job_id: int, attempt: int, total: int, proxy_cfg, err_text: str) -> None:
+    used = str(getattr(proxy_cfg, "LAST_PICKED", "") or "")
+    log_logger.warning(
+        "[Job %s] 第 %s/%s 次尝试失败（网络/页面类），更换代理节点后重试：节点=%s | %s",
+        job_id,
+        attempt,
+        total,
+        used.rsplit("@", 1)[-1] if used else "-",
+        err_text[:200],
+    )
+    if "InvalidSessionId" in err_text or "invalid session id" in err_text.lower():
+        killed = _kill_orphan_chromedrivers()
+        if killed:
+            log_logger.warning("[Job %s] 已清理 %s 个孤儿 chromedriver 进程", job_id, killed)
+    if used:
+        proxy_cfg.exclude_proxy(used)
+    time.sleep(20)
+
+
 def _run_one_job(job_id: int, log_file: str) -> None:
-    """单任务入口（线程池里跑这个）。"""
     log_logger = logging.getLogger(__name__)
     if not _activate_job(job_id):
         log_logger.info("[Job %s] 任务不存在、已取消/结束或已被领取，跳过执行", job_id)
@@ -307,6 +412,7 @@ def _run_one_job(job_id: int, log_file: str) -> None:
     try:
         with _JobLogContext(log_file):
             from main import run_registration
+            from config import proxy as _proxy_cfg
             log_logger.info(f"[Job {job_id}] 开始注册任务")
             job = db.get_job(job_id) or {}
             resume = job.get("job_type") == "registration_resume"
@@ -330,13 +436,37 @@ def _run_one_job(job_id: int, log_file: str) -> None:
                     db.update_job(job_id, email=email)
                     log_logger.info(f"[Job {job_id}] 页面已找到邮箱输入框，已分配邮箱: {email}")
 
-            result = run_registration(
-                email=email,
-                name=name,
-                birthday=birthday,
-                on_email_acquired=_on_email_acquired,
-                **({"resume_registration": True} if resume else {}),
-            )
+            # 住宅代理会周期性掉线（连接被 RST），表现为页面白屏/元素缺失。
+            # 这类失败换一个节点重跑一次通常就能过，且邮箱是复用的、不额外扣费。
+            # 上游新增 resume_registration：继续注册任务需透传该开关。
+            attempt_total = 3
+            result = None
+            for attempt in range(1, attempt_total + 1):
+                try:
+                    result = run_registration(
+                        email=email,
+                        name=name,
+                        birthday=birthday,
+                        on_email_acquired=_on_email_acquired,
+                        **({"resume_registration": True} if resume else {}),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    err_text = f"{type(exc).__name__}: {exc}"
+                    if attempt < attempt_total and _is_transient_registration_failure(err_text):
+                        _retry_after_transient_failure(
+                            log_logger, job_id, attempt, attempt_total, _proxy_cfg, err_text
+                        )
+                        continue
+                    raise
+                if isinstance(result, dict) and result.get("success"):
+                    break
+                err_text = str((result or {}).get("error") or "")
+                if attempt < attempt_total and _is_transient_registration_failure(err_text):
+                    _retry_after_transient_failure(
+                        log_logger, job_id, attempt, attempt_total, _proxy_cfg, err_text
+                    )
+                    continue
+                break
             if is_stop_requested(job_id):
                 _release_unconsumed_job_email(email, "用户手动停止")
                 _finish_active_job(
