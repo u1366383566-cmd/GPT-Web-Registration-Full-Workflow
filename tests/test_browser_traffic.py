@@ -172,6 +172,50 @@ class _CoverageContext(_Emitter):
 
 
 class BrowserTrafficTests(unittest.TestCase):
+    def test_playwright_local_asset_cache_hit_skips_blocking_size_lookup(self):
+        class _Cache:
+            @staticmethod
+            def was_playwright_fulfilled(_request):
+                return True
+
+        class _CachedRequest(_Request):
+            resource_type = "script"
+            url = "https://chatgpt.com/cdn/assets/app.js"
+
+            def sizes(self):
+                raise AssertionError("cache hit must not call Request.sizes()")
+
+        context = _Emitter()
+        context.pages = []
+        tracker = PlaywrightTrafficTracker(context)
+        tracker.attach_local_asset_cache(_Cache())
+        request = _CachedRequest()
+        context.emit("request", request)
+        context.emit("requestfinished", request)
+        result = tracker.stop()
+
+        self.assertEqual(result["request_count"], 1)
+        self.assertEqual(result["http_upload_bytes"], 0)
+        self.assertEqual(result["http_download_bytes"], 0)
+
+    def test_unfinished_playwright_request_does_not_call_blocking_sizes(self):
+        class _PendingRequest(_Request):
+            resource_type = "xhr"
+            url = "https://example.test/pending"
+
+            def sizes(self):
+                raise AssertionError("unfinished request must not call Request.sizes()")
+
+        context = _Emitter()
+        context.pages = []
+        tracker = PlaywrightTrafficTracker(context)
+        request = _PendingRequest()
+        context.emit("request", request)
+        result = tracker.stop()
+
+        self.assertEqual(result["unfinished_request_count"], 1)
+        self.assertEqual(result["http_download_bytes"], 0)
+
     def test_playwright_counts_http_and_websocket_without_payload_capture(self):
         context = _Emitter()
         page = _Emitter()

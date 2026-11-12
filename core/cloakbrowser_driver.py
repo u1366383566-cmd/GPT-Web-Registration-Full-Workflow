@@ -200,7 +200,9 @@ class CloakSeleniumDriver:
         self.page.go_back(wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
 
     def refresh(self) -> None:
-        self.page.reload(wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
+        # 认证页刷新偶发不触发 DOMContentLoaded；等待 commit 已足以获得新导航，
+        # 后续注册逻辑会自己轮询目标元素，不能在这里无限等待整页加载完成。
+        self.page.reload(wait_until="commit", timeout=min(self._page_load_timeout_ms, 30000))
 
     def quit(self) -> None:
         try:

@@ -7431,6 +7431,37 @@ function trackConfigFieldChange(e) {
 $('#tab-config').addEventListener('input', trackConfigFieldChange);
 $('#tab-config').addEventListener('change', trackConfigFieldChange);
 
+// 省流量开关需要立即控制后续新建的浏览器，避免界面已开启但配置尚未保存。
+$('#tab-config').addEventListener('change', async (e) => {
+  const el = e.target;
+  if (el.dataset.key !== 'BROWSER_DATA_SAVER_MODE' || el.type !== 'checkbox') return;
+  const f = CONFIG.find(x => x.key === el.dataset.key);
+  if (!f) return;
+  const previous = !!f.value;
+  const value = !!el.checked;
+  el.disabled = true;
+  try {
+    const r = await api('/api/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({updates: {[f.key]: value}}),
+    });
+    if (!r.ok || !(r.updated || []).includes(f.key)) {
+      throw new Error(r.note || r.error || '配置未生效');
+    }
+    f.value = value;
+    delete CONFIG_PENDING_UPDATES[f.key];
+    showToast(r.reloaded
+      ? (value ? '省流量模式已开启，新建浏览器生效' : '省流量模式已关闭，新建浏览器生效')
+      : '省流量设置已保存，但热加载失败，需要重启服务');
+  } catch (err) {
+    el.checked = previous;
+    delete CONFIG_PENDING_UPDATES[f.key];
+    showToast('省流量模式保存失败：' + err.message);
+  } finally {
+    el.disabled = false;
+  }
+});
+
 async function saveConfigUpdates(triggerBtn) {
   const updates = {...CONFIG_PENDING_UPDATES};
   const seen = new Set();

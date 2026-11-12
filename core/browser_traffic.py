@@ -1001,6 +1001,7 @@ class PlaywrightTrafficTracker(_TrafficAccumulator):
         blocked: bool = False,
         unfinished: bool = False,
         include_response: bool = True,
+        cache_status_override: str | None = None,
     ) -> None:
         # 明细日志关闭时不要触碰 Request 的同步方法；尤其不能让诊断逻辑影响
         # requestfailed/page.goto 的主流程。
@@ -1020,7 +1021,7 @@ class PlaywrightTrafficTracker(_TrafficAccumulator):
             failed=failed,
             blocked=blocked,
             unfinished=unfinished,
-            cache_status=metadata["cache_status"],
+            cache_status=cache_status_override or metadata["cache_status"],
             size_source="playwright.sizes" if include_response else "estimated_upload",
             mime_type=metadata["mime_type"],
             detail_key=f"playwright:{request_id}",
@@ -1048,6 +1049,28 @@ class PlaywrightTrafficTracker(_TrafficAccumulator):
                 request_id=key,
                 blocked=True,
                 include_response=False,
+            )
+            return
+
+        try:
+            local_cached = bool(
+                self._local_asset_cache
+                and self._local_asset_cache.was_playwright_fulfilled(request)
+            )
+        except Exception:
+            local_cached = False
+        if local_cached:
+            with self._lock:
+                if failed:
+                    self.failed_request_count += 1
+                else:
+                    self.completed_request_count += 1
+            self._record_playwright_detail(
+                request,
+                request_id=key,
+                failed=failed,
+                include_response=False,
+                cache_status_override="local_asset_cache",
             )
             return
 
@@ -1189,22 +1212,39 @@ class PlaywrightTrafficTracker(_TrafficAccumulator):
                 )
                 continue
 
-            values = self._request_size_values(request) or {}
-            if values:
-                upload = (values.get("requestBodySize") or 0) + (values.get("requestHeadersSize") or 0)
-                download = (values.get("responseBodySize") or 0) + (values.get("responseHeadersSize") or 0)
-                include_response = True
-            else:
-                upload = self._request_fallback_upload(request)
-                download = 0
-                include_response = False
+            try:
+                local_cached = bool(
+                    self._local_asset_cache
+                    and self._local_asset_cache.was_playwright_fulfilled(request)
+                )
+            except Exception:
+                local_cached = False
+            if local_cached:
+                with self._lock:
+                    self._accounted_requests.add(key)
+                self._record_playwright_detail(
+                    request,
+                    request_id=key,
+                    unfinished=True,
+                    include_response=False,
+                    cache_status_override="local_asset_cache",
+                )
+                continue
+
+            # 对未完成请求调用 Request.sizes() 会在 Playwright 同步事件循环里
+            # 等待永远不会到达的完成事件，导致整个注册任务停止时卡死。
+            # 上传部分按已发出的请求头/体估算；下载保持 0，代理中继仍提供
+            # 权威的实际传输字节。
+            upload = self._request_fallback_upload(request)
+            download = 0
+            include_response = False
             self._record_playwright_detail(
                 request,
                 request_id=key,
                 upload_bytes=upload,
                 download_bytes=download,
-                response_body_bytes=values.get("responseBodySize") or 0,
-                response_header_bytes=values.get("responseHeadersSize") or 0,
+                response_body_bytes=0,
+                response_header_bytes=0,
                 unfinished=True,
                 include_response=include_response,
             )

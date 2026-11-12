@@ -15,6 +15,7 @@ from core.browser_traffic import PlaywrightTrafficTracker, merge_proxy_transport
 from core.cloakbrowser_driver import build_cloak_driver
 from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
+from core.playwright_asset_cache import PlaywrightLocalAssetCache
 
 # 复用 Roxy 注册流程里已维护好的页面操作函数。
 from core.roxy_registration import (  # noqa: F401
@@ -42,6 +43,8 @@ def run_cloak_registration(
     openai_password: str | None = None
     traffic_tracker: PlaywrightTrafficTracker | None = None
     data_saver: BrowserDataSaver | None = None
+    asset_cache: PlaywrightLocalAssetCache | None = None
+    asset_cache_snapshot: dict | None = None
     network_traffic: dict | None = None
     try:
         driver, opened = build_cloak_driver(proxy=proxy)
@@ -50,9 +53,15 @@ def run_cloak_registration(
         except Exception as exc:
             # 统计失败不应影响注册主流程。
             logger.warning("[Cloak注册] 初始化浏览器流量统计失败，继续注册：%s: %s", type(exc).__name__, str(exc)[:180])
+        try:
+            asset_cache = PlaywrightLocalAssetCache(driver.context, label="Cloak").start()
+        except Exception as exc:
+            logger.warning("[Cloak注册] 初始化本地静态资源缓存失败，继续联网加载：%s: %s", type(exc).__name__, str(exc)[:180])
         data_saver = BrowserDataSaver(label="Cloak")
+        data_saver.attach_playwright_asset_cache(asset_cache)
         if traffic_tracker is not None:
             traffic_tracker.attach_data_saver(data_saver)
+            traffic_tracker.attach_local_asset_cache(asset_cache)
         data_saver.install_playwright(driver.context)
         logger.info("[Cloak注册] 开始：%s，profile=%s", email, opened.profile_id)
 
@@ -164,8 +173,14 @@ def run_cloak_registration(
 
         # 统计注册浏览器关闭前的完整会话；注册后停留期间的网络请求也计入。
         post_register_dwell(email, label="Cloak注册")
+        if asset_cache is not None:
+            asset_cache_snapshot = asset_cache.stop()
         if traffic_tracker is not None:
             network_traffic = traffic_tracker.stop()
+        if asset_cache_snapshot is not None:
+            if not isinstance(network_traffic, dict):
+                network_traffic = {}
+            network_traffic["local_asset_cache"] = asset_cache_snapshot
         network_traffic = merge_proxy_transport_traffic(network_traffic, driver.proxy_transport_snapshot(), label="Cloak")
         if data_saver is not None:
             data_saver.stop()
@@ -198,11 +213,20 @@ def run_cloak_registration(
             "error": None if codex_ok else f"Codex 未完成: {codex_result.get('message')}",
         }
     except Exception as exc:
+        if asset_cache is not None and asset_cache_snapshot is None:
+            try:
+                asset_cache_snapshot = asset_cache.stop()
+            except Exception:
+                pass
         if traffic_tracker is not None:
             try:
                 network_traffic = traffic_tracker.stop()
             except Exception:
                 pass
+        if asset_cache_snapshot is not None:
+            if not isinstance(network_traffic, dict):
+                network_traffic = {}
+            network_traffic["local_asset_cache"] = asset_cache_snapshot
         if driver is not None:
             network_traffic = merge_proxy_transport_traffic(network_traffic, driver.proxy_transport_snapshot(), label="Cloak")
         if data_saver is not None:
@@ -222,6 +246,11 @@ def run_cloak_registration(
             "error": f"{type(exc).__name__}: {str(exc)[:300]}",
         }
     finally:
+        if asset_cache is not None and asset_cache_snapshot is None:
+            try:
+                asset_cache.stop()
+            except Exception:
+                pass
         if traffic_tracker is not None:
             try:
                 traffic_tracker.stop()

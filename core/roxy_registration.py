@@ -1143,44 +1143,50 @@ def _submit_email_and_wait_next(
     raise RuntimeError(f"邮箱提交后未进入密码页/验证码页，最后状态={last_state}")
 
 
-def _type_otp(driver, code: str, *, attempts: int = 4, retry_delay: float = 1.5) -> None:
+def _type_otp(driver, code: str, *, attempts: int = 10, retry_delay: float = 1.0) -> None:
     from selenium.webdriver.common.by import By
 
+    last_state = {}
     for refresh_retry in range(_MISSING_PAGE_ELEMENT_REFRESH_RETRIES + 1):
-        # 单输入框
-        for selector in [
-            "input[autocomplete='one-time-code']",
-            "input[name='code']",
-            "input[inputmode='numeric']",
-            "input[type='tel']",
-        ]:
-            els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
-            if len(els) == 1:
-                _human_type_text(driver, els[0], code, clear=True)
-                return
+        # Playwright/Cloak 跳转到验证码页后，输入框通常比 URL 晚数秒渲染。
+        # 旧逻辑立即刷新，会把正常慢渲染误判为缺元素，并在刷新中卡住。
+        for poll_index in range(max(1, int(attempts))):
+            for selector in [
+                "input[autocomplete='one-time-code']",
+                "input[name='code']",
+                "input[inputmode='numeric']",
+                "input[type='tel']",
+            ]:
+                els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
+                if len(els) == 1:
+                    _human_type_text(driver, els[0], code, clear=True)
+                    return
 
-        # 6 个分格输入框
-        boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
-        numeric_boxes = []
-        for e in boxes:
-            attrs = " ".join(str(e.get_attribute(k) or "") for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type"))
-            if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
-                numeric_boxes.append(e)
-        if len(numeric_boxes) >= len(code):
-            for e, ch in zip(numeric_boxes, code):
-                if _browser_actions_enabled():
-                    _human_scroll_to(driver, e)
-                    time.sleep(random.uniform(0.04, 0.18))
-                e.send_keys(ch)
-                if _browser_actions_enabled():
-                    human_delay("keystroke")
-            return
+            # 6 个分格输入框
+            boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
+            numeric_boxes = []
+            for e in boxes:
+                attrs = " ".join(str(e.get_attribute(k) or "") for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type"))
+                if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
+                    numeric_boxes.append(e)
+            if len(numeric_boxes) >= len(code):
+                for e, ch in zip(numeric_boxes, code):
+                    if _browser_actions_enabled():
+                        _human_scroll_to(driver, e)
+                        time.sleep(random.uniform(0.04, 0.18))
+                    e.send_keys(ch)
+                    if _browser_actions_enabled():
+                        human_delay("keystroke")
+                return
+            last_state = _email_otp_page_state(driver)
+            if poll_index + 1 < max(1, int(attempts)):
+                time.sleep(max(0.0, float(retry_delay)))
 
         if not _refresh_after_missing_page_element(driver, "OTP输入框", refresh_retry):
             break
 
     raise RuntimeError(
-        f"找不到 OTP 输入框，已刷新重试{_MISSING_PAGE_ELEMENT_REFRESH_RETRIES}次"
+        f"找不到 OTP 输入框，已刷新重试{_MISSING_PAGE_ELEMENT_REFRESH_RETRIES}次 state={last_state}"
     )
 
 
@@ -1281,10 +1287,11 @@ def _wait_after_email_otp_submit(driver, timeout: int = 30) -> str:
     """提交 OTP 后等待页面离开验证码页。
 
     只有页面明确出现验证码错误（aria-invalid / 错误文案）才判定为无效；
-    网络慢时页面跳转可能超过 10s，超时后只要没有错误标记就按 accepted 处理，
-    避免把已提交成功的验证码误判为失败后误点“重新发送”把流程搞乱。
+    页面停留且确认按钮仍可用时补点一次；只有离开验证页才视为成功。
     """
     end = time.time() + timeout
+    retry_at = time.time() + timeout / 2
+    retried = False
     last = {}
     while time.time() < end:
         time.sleep(0.5)
@@ -1294,19 +1301,25 @@ def _wait_after_email_otp_submit(driver, timeout: int = 30) -> str:
         invalid = any(str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or []))
         if invalid or (last.get('errors') or []):
             return 'invalid'
+        if not retried and time.time() >= retry_at:
+            retried = True
+            try:
+                from selenium.webdriver.common.by import By
+                for button in driver.find_elements(By.CSS_SELECTOR, "button[data-dd-action-name='Continue'][type='submit'],button[type='submit'][value='validate']"):
+                    if _visible(button):
+                        _human_click(driver, button, label='email_otp_retry')
+                        logger.info('%s[OTP] 验证码页仍未跳转，已重试点击继续', _log_prefix(driver))
+                        break
+            except Exception as exc:
+                logger.warning('%s[OTP] 重试点击继续失败：%s', _log_prefix(driver), str(exc)[:120])
     if _is_email_verification_page(driver):
-        # 超时仍停留：若无明确错误标记，判定为提交成功、跳转缓慢，按 accepted 放行。
         has_error_mark = bool(last.get('errors')) or any(
             str(i.get('ariaInvalid') or '').lower() == 'true' for i in (last.get('inputs') or [])
         )
         if has_error_mark:
             logger.warning("%s[OTP] 提交后仍停留验证码页且存在错误标记，按验证码无效处理 snapshot=%s", _log_prefix(driver), last)
             return 'invalid'
-        logger.warning(
-            "%s[OTP] 提交后 %ss 仍在验证码页但无错误标记，按跳转缓慢处理（accepted） snapshot=%s",
-            _log_prefix(driver), timeout, last
-        )
-        return 'accepted'
+        raise RuntimeError(f"邮箱验证码提交后 {timeout}s 仍停留验证页，未确认提交成功")
     return 'accepted'
 
 

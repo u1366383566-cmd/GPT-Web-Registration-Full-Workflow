@@ -148,6 +148,8 @@ Roxy/Selenium 会在启动参数中关闭图片加载，并使用 Chrome CDP 拦
 
 Job 208 的明细显示，当前规则实际拦截了 5 个第三方脚本（Google GSI、Facebook、TikTok、LinkedIn、Bing）以及 380 次 RUM 请求；邮箱/密码注册成功。注册侧下载约 9.92 MiB，其中脚本约 8.90 MiB，主要来自 ChatGPT 核心 CDN chunk。
 
+Roxy/Cloak 开启省流量模式后都会自动启用跨任务静态资源缓存。Cloak 只缓存公开、版本化的 JS/CSS/font；document、认证、OTP、Sentinel、API、XHR、fetch 和 WebSocket 始终直接联网。默认缓存目录分别为 `./cache/roxy-assets` 和 `./cache/cloak-assets`，缓存过期时间 24 小时，单文件上限 25 MiB。
+
 当前默认规则只包含 RUM/广告统计和 Google GSI。邮箱/密码注册不使用 Google 登录，因此可以保留 GSI 规则；如果将来启用 Google 登录，需从「省流量 URL 屏蔽规则」中移除以下行：
 
 ```text

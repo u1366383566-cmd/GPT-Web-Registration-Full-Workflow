@@ -49,6 +49,64 @@ class _Driver:
 
 
 class BrowserDataSaverTests(unittest.TestCase):
+    def test_playwright_route_uses_cache_after_block_rules(self):
+        class _Cache:
+            enabled = True
+
+            def __init__(self):
+                self.calls = 0
+
+            def handle_route(self, route):
+                self.calls += 1
+                route.action = "cache"
+                return True
+
+        context = _Context()
+        cache = _Cache()
+        with patch("core.browser_data_saver._cfg.BROWSER_DATA_SAVER_MODE", True), patch(
+            "core.browser_data_saver._cfg.BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES", []
+        ), patch(
+            "core.browser_data_saver._cfg.BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS", []
+        ):
+            saver = BrowserDataSaver(label="test")
+            saver.attach_playwright_asset_cache(cache)
+            saver.install_playwright(context)
+            route = _Route(_Request("script", "https://chatgpt.com/cdn/assets/app.js"))
+            context.handler(route)
+
+        self.assertEqual(cache.calls, 1)
+        self.assertEqual(route.action, "cache")
+        saver.stop()
+
+    def test_blocked_telemetry_is_not_passed_to_cache(self):
+        class _Cache:
+            enabled = True
+
+            def __init__(self):
+                self.calls = 0
+
+            def handle_route(self, route):
+                self.calls += 1
+                return True
+
+        context = _Context()
+        cache = _Cache()
+        with patch("core.browser_data_saver._cfg.BROWSER_DATA_SAVER_MODE", True), patch(
+            "core.browser_data_saver._cfg.BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES", []
+        ), patch(
+            "core.browser_data_saver._cfg.BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS",
+            ["**://metrics.example/**"],
+        ):
+            saver = BrowserDataSaver(label="test")
+            saver.attach_playwright_asset_cache(cache)
+            saver.install_playwright(context)
+            route = _Route(_Request("script", "https://metrics.example/sdk.js"))
+            context.handler(route)
+
+        self.assertEqual(cache.calls, 0)
+        self.assertEqual(route.action, "abort")
+        saver.stop()
+
     def test_disabled_mode_does_not_install_route(self):
         context = _Context()
         with patch("core.browser_data_saver._cfg.BROWSER_DATA_SAVER_MODE", False):

@@ -37,5 +37,30 @@ CLOAK_SELENIUM_TIMEOUT: int = 90
 # 调试时保留浏览器不自动关闭。
 CLOAK_KEEP_BROWSER_OPEN: bool = False
 
+# Cloak 跨任务本地静态资源缓存。开启 BROWSER_DATA_SAVER_MODE 后自动启用。
+# 仅缓存公开静态 JS/CSS/font，不缓存认证、API、OTP、document 或账号状态。
+CLOAK_LOCAL_ASSET_CACHE_ENABLED: bool = False
+CLOAK_LOCAL_ASSET_CACHE_MODE: str = "auto"
+CLOAK_LOCAL_ASSET_CACHE_DIR: str = "./cache/cloak-assets"
+CLOAK_LOCAL_ASSET_CACHE_MAX_AGE: int = 86400
+CLOAK_LOCAL_ASSET_CACHE_MAX_ITEM_BYTES: int = 25 * 1024 * 1024
+
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'CLOAK_HEADLESS': 'bool', 'CLOAK_HUMANIZE': 'bool', 'CLOAK_GEOIP': 'bool', 'CLOAK_LOCALE': 'str', 'CLOAK_TIMEZONE': 'str', 'CLOAK_USE_PROXY': 'bool', 'CLOAK_LICENSE_KEY': 'str', 'CLOAK_FINGERPRINT_SEED': 'str', 'CLOAK_USER_DATA_DIR': 'str', 'CLOAK_SELENIUM_TIMEOUT': 'int', 'CLOAK_KEEP_BROWSER_OPEN': 'bool'})
+apply_env_overrides(globals(), {
+    'CLOAK_HEADLESS': 'bool',
+    'CLOAK_HUMANIZE': 'bool',
+    'CLOAK_GEOIP': 'bool',
+    'CLOAK_LOCALE': 'str',
+    'CLOAK_TIMEZONE': 'str',
+    'CLOAK_USE_PROXY': 'bool',
+    'CLOAK_LICENSE_KEY': 'str',
+    'CLOAK_FINGERPRINT_SEED': 'str',
+    'CLOAK_USER_DATA_DIR': 'str',
+    'CLOAK_SELENIUM_TIMEOUT': 'int',
+    'CLOAK_KEEP_BROWSER_OPEN': 'bool',
+    'CLOAK_LOCAL_ASSET_CACHE_ENABLED': 'bool',
+    'CLOAK_LOCAL_ASSET_CACHE_MODE': 'str',
+    'CLOAK_LOCAL_ASSET_CACHE_DIR': 'str',
+    'CLOAK_LOCAL_ASSET_CACHE_MAX_AGE': 'int',
+    'CLOAK_LOCAL_ASSET_CACHE_MAX_ITEM_BYTES': 'int',
+})

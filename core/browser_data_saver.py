@@ -144,6 +144,7 @@ class BrowserDataSaver:
         self._context: Any | None = None
         self._driver: Any | None = None
         self._route_handler: Any | None = None
+        self._playwright_asset_cache: Any | None = None
         self._blocked_playwright_requests: set[int] = set()
         self._selenium_patterns: list[str] = []
         self._installed = False
@@ -200,11 +201,16 @@ class BrowserDataSaver:
             self._blocked_playwright_requests.remove(key)
             return True
 
+    def attach_playwright_asset_cache(self, cache: Any | None) -> None:
+        self._playwright_asset_cache = cache
+
     def install_playwright(self, context: Any) -> "BrowserDataSaver":
-        """在 BrowserContext 上按 resource_type 拦截请求。"""
-        if not self.enabled:
+        """在 BrowserContext 上统一执行拦截和本地缓存。"""
+        cache = self._playwright_asset_cache
+        cache_enabled = bool(cache is not None and getattr(cache, "enabled", False))
+        if not self.enabled and not cache_enabled:
             return self
-        if not self.resource_types and not self.url_patterns:
+        if not self.resource_types and not self.url_patterns and not cache_enabled:
             logger.info("[%s] 省流量模式已开启，但未配置可拦截资源类型或 URL 规则", self.label)
             return self
         try:
@@ -225,6 +231,8 @@ class BrowserDataSaver:
                             # 兼容极旧的 Playwright route.abort() 签名。
                             route.abort()
                         return
+                    if cache_enabled and cache.handle_route(route):
+                        return
                     route.continue_()
                 except Exception as exc:
                     # 拦截器不能阻断注册主流程；处理异常时尽量放行请求。
@@ -240,10 +248,11 @@ class BrowserDataSaver:
             self._installed = True
             self.method = "playwright.context.route"
             logger.info(
-                "[%s] 省流量模式已启用：拦截资源类型=%s，URL规则=%s（验证码/challenge 相关 URL 放行）",
+                "[%s] 省流量模式已启用：拦截资源类型=%s，URL规则=%s，本地缓存=%s（验证码/challenge 相关 URL 放行）",
                 self.label,
                 ",".join(self.resource_types) or "-",
                 len(self.url_patterns),
+                cache_enabled,
             )
         except Exception as exc:
             logger.warning("[%s] 安装 Playwright 省流量拦截失败，继续不拦截：%s: %s", self.label, type(exc).__name__, exc)
@@ -359,6 +368,7 @@ class BrowserDataSaver:
         self._route_handler = None
         self._context = None
         self._driver = None
+        self._playwright_asset_cache = None
         self._blocked_playwright_requests.clear()
 
 
