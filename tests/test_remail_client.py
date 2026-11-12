@@ -9,9 +9,12 @@ from core import remail_client
 class RemailClientTests(unittest.TestCase):
     def setUp(self):
         remail_client._CONTEXT_CACHE.clear()
+        remail_client._REUSED_ORDER_EMAILS.clear()
 
     @patch("core.remail_client.requests.request")
     def test_pick_account_creates_code_order_and_caches_service_token(self, request):
+        list_response = Mock(status_code=200)
+        list_response.json.return_value = {"items": []}
         response = Mock(status_code=201)
         response.json.return_value = {
             "id": 3021,
@@ -20,7 +23,7 @@ class RemailClientTests(unittest.TestCase):
             "deliveryEmail": "fresh@outlook.test",
             "serviceToken": "st-test-token",
         }
-        request.return_value = response
+        request.side_effect = [list_response, response]
 
         with patch.object(email_config, "REMAIL_API_BASE", "https://remail.aishop6.com/docs", create=True), patch.object(
             email_config, "REMAIL_API_KEY", "rk-test-key", create=True
@@ -34,8 +37,12 @@ class RemailClientTests(unittest.TestCase):
         self.assertEqual(account.email, "fresh@outlook.test")
         self.assertEqual(account.service_token, "st-test-token")
         self.assertIs(remail_client.get_account_context("FRESH@OUTLOOK.TEST"), account)
-        request.assert_called_once()
-        args, kwargs = request.call_args
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(
+            request.call_args_list[0].args[:2],
+            ("GET", "https://remail.aishop6.com/v1/open/orders"),
+        )
+        args, kwargs = request.call_args_list[1]
         self.assertEqual(args[:2], ("POST", "https://remail.aishop6.com/v1/open/orders"))
         self.assertEqual(kwargs["params"], {"serviceMode": "code", "supply": "private_first"})
         self.assertEqual(kwargs["json"], {"projectId": 1001, "emailSuffix": "outlook.com"})
@@ -45,6 +52,8 @@ class RemailClientTests(unittest.TestCase):
     @patch("core.remail_client.time.sleep")
     @patch("core.remail_client.requests.request")
     def test_pick_account_can_wait_for_order_credentials(self, request, sleep):
+        list_response = Mock(status_code=200)
+        list_response.json.return_value = {"items": []}
         create_response = Mock(status_code=201)
         create_response.json.return_value = {
             "orderNo": "R20260829123456789",
@@ -57,7 +66,7 @@ class RemailClientTests(unittest.TestCase):
             "deliveryEmail": "fresh@outlook.test",
             "serviceToken": "st-test-token",
         }
-        request.side_effect = [create_response, detail_response]
+        request.side_effect = [list_response, create_response, detail_response]
 
         with patch.object(email_config, "REMAIL_API_KEY", "rk-test-key", create=True), patch.object(
             email_config, "REMAIL_PROJECT_ID", 1001, create=True
@@ -68,7 +77,7 @@ class RemailClientTests(unittest.TestCase):
 
         self.assertEqual(account.email, "fresh@outlook.test")
         self.assertEqual(
-            request.call_args_list[1].args[:2],
+            request.call_args_list[2].args[:2],
             ("GET", "https://remail.aishop6.com/v1/open/orders/R20260829123456789"),
         )
 
